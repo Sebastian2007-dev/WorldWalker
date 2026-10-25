@@ -1,0 +1,8 @@
+build/
+cache/
+*.blend1
+assets/baked/trees/*/_frame.png
+settings.json
+character.json
+character.json.tmp
+tools/downloads/

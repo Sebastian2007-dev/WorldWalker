@@ -1,0 +1,60 @@
+#version 460
+#include "common.glsl"
+
+layout(local_size_x = 256) in;
+
+struct TreeInstance { vec3 pos; float yaw; float scale; uint variant; float pad0; float pad1; };
+layout(buffer_reference, scalar) readonly buffer InstanceRef { TreeInstance d[]; };
+layout(buffer_reference, scalar) buffer CounterRef { uint d[]; };
+
+layout(push_constant, scalar) uniform Push {
+    FrameRef frame;
+    VegCellRef cells;
+    InstanceRef instances;
+    VariantRef variants;
+    VisibleRef visible;
+    CounterRef counters;
+    uint cellCount;
+    uint variantCount;
+    uint caps[3];
+    uint minLod;
+} pc;
+
+void main() {
+    uint ci = gl_WorkGroupID.x;
+    VegCell c = pc.cells.d[ci];
+    FrameRef f = pc.frame;
+    uint perVariant = pc.caps[0] + pc.caps[1] + pc.caps[2];
+
+    for (uint i = gl_LocalInvocationID.x; i < c.instanceCount; i += 256u) {
+        TreeInstance t = pc.instances.d[c.firstInstance + i];
+        Variant var = pc.variants.d[t.variant];
+        vec3 p = c.originRel + t.pos;
+        float h = var.height * t.scale;
+        vec3 center = p + c.up * (h * 0.5);
+        float rad = var.boundRadius * t.scale;
+        float dist = length(center);
+
+        float maxDist = min(f.impostorDistance, 150.0 + h * 100.0);
+        if (dist > maxDist) continue;
+        bool vis = true;
+        for (int k = 0; k < 6; ++k)  // plane 5 is always-inside for the camera, the sunward bound for shadows
+            if (dot(f.frustum[k].xyz, center) + f.frustum[k].w < -rad) vis = false;
+        if (!vis) continue;
+
+        float lodDist = dist / f.lodScale;
+        uint lod = max(lodDist < 8.0 + h * 0.8 ? 0u : (lodDist < 15.0 + h * 1.6 ? 1u : 2u), pc.minLod);
+        uint bucket = t.variant * 3u + lod;
+        uint slot = atomicAdd(pc.counters.d[bucket], 1u);
+        if (slot >= pc.caps[lod]) continue;
+        uint base = t.variant * perVariant + (lod > 0u ? pc.caps[0] : 0u) + (lod > 1u ? pc.caps[1] : 0u);
+
+        VisibleTree vt;
+        vt.pos = p;
+        vt.scale = t.scale;
+        vt.cs = vec2(cos(t.yaw), sin(t.yaw));
+        vt.cell = ci;
+        vt.fade = clamp((maxDist - dist) / (maxDist * 0.15), 0.0, 1.0);
+        pc.visible.d[base + slot] = vt;
+    }
+}

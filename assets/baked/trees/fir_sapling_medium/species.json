@@ -1,0 +1,95 @@
+{
+  "species": "fir_sapling_medium",
+  "biomes": [
+    "conifer",
+    "conifer_young"
+  ],
+  "materials": [
+    {
+      "name": "fir_sapling_medium_branches",
+      "leaf": false,
+      "albedo": "fir_sapling_medium_branches_albedo.png",
+      "normal": "fir_sapling_medium_branches_nrm.png"
+    },
+    {
+      "name": "fir_sapling_medium_twigs",
+      "leaf": true,
+      "albedo": "fir_sapling_medium_twigs_albedo.png",
+      "normal": "fir_sapling_medium_twigs_nrm.png"
+    },
+    {
+      "name": "fir_sapling_medium_branches_dead",
+      "leaf": false,
+      "albedo": "fir_sapling_medium_branches_dead_albedo.png",
+      "normal": "fir_sapling_medium_branches_dead_nrm.png"
+    }
+  ],
+  "variants": [
+    {
+      "name": "fir_sapling_medium_a",
+      "height": 8.772769927978516,
+      "crown_radius": 2.974580764770508,
+      "lods": [
+        {
+          "mesh": "fir_sapling_medium_a_lod0.wwm",
+          "tris": 19016
+        },
+        {
+          "mesh": "fir_sapling_medium_a_lod1.wwm",
+          "tris": 6149
+        }
+      ],
+      "impostor": {
+        "albedo": "fir_sapling_medium_a_imp_albedo.png",
+        "normal": "fir_sapling_medium_a_imp_normal.png",
+        "grid": 8,
+        "radius": 4.563712463378907,
+        "center_z": 4.34226131439209
+      }
+    },
+    {
+      "name": "fir_sapling_medium_b",
+      "height": 7.809569358825684,
+      "crown_radius": 2.8739898204803467,
+      "lods": [
+        {
+          "mesh": "fir_sapling_medium_b_lod0.wwm",
+          "tris": 11886
+        },
+        {
+          "mesh": "fir_sapling_medium_b_lod1.wwm",
+          "tris": 7219
+        }
+      ],
+      "impostor": {
+        "albedo": "fir_sapling_medium_b_imp_albedo.png",
+        "normal": "fir_sapling_medium_b_imp_normal.png",
+        "grid": 8,
+        "radius": 4.123746414184571,
+        "center_z": 3.845796823501587
+      }
+    },
+    {
+      "name": "fir_sapling_medium_c",
+      "height": 5.786827087402344,
+      "crown_radius": 2.451312780380249,
+      "lods": [
+        {
+          "mesh": "fir_sapling_medium_c_lod0.wwm",
+          "tris": 11074
+        },
+        {
+          "mesh": "fir_sapling_medium_c_lod1.wwm",
+          "tris": 7290
+        }
+      ],
+      "impostor": {
+        "albedo": "fir_sapling_medium_c_imp_albedo.png",
+        "normal": "fir_sapling_medium_c_imp_normal.png",
+        "grid": 8,
+        "radius": 3.473853850364685,
+        "center_z": 2.8172764778137207
+      }
+    }
+  ]
+}

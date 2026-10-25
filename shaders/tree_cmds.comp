@@ -1,0 +1,33 @@
+#version 460
+#include "common.glsl"
+
+layout(local_size_x = 64) in;
+
+struct DrawIndexedCmd { uint indexCount; uint instanceCount; uint firstIndex; int vertexOffset; uint firstInstance; };
+struct DrawCmd { uint vertexCount; uint instanceCount; uint firstVertex; uint firstInstance; };
+layout(buffer_reference, scalar) buffer MeshCmdRef { DrawIndexedCmd d[]; };
+layout(buffer_reference, scalar) buffer ImpCmdRef { DrawCmd d[]; };
+layout(buffer_reference, scalar) readonly buffer CounterRef { uint d[]; };
+
+layout(push_constant, scalar) uniform Push {
+    CounterRef counters;
+    MeshCmdRef meshCmds;
+    DrawInfoRef meshInfo;
+    ImpCmdRef impCmds;
+    DrawInfoRef impInfo;
+    uint meshCount;
+    uint impCount;
+    uint caps[3];
+} pc;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i < pc.meshCount) {
+        uint b = pc.meshInfo.d[i].bucket;
+        pc.meshCmds.d[i].instanceCount = min(pc.counters.d[b], pc.caps[b % 3u]);
+    } else if (i < pc.meshCount + pc.impCount) {
+        uint j = i - pc.meshCount;
+        uint b = pc.impInfo.d[j].bucket;
+        pc.impCmds.d[j].instanceCount = min(pc.counters.d[b], pc.caps[b % 3u]);
+    }
+}

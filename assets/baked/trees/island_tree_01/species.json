@@ -1,0 +1,44 @@
+{
+  "species": "island_tree_01",
+  "biomes": [
+    "broadleaf"
+  ],
+  "materials": [
+    {
+      "name": "island_tree_01_leaves",
+      "leaf": true,
+      "albedo": "island_tree_01_leaves_albedo.png",
+      "normal": "island_tree_01_leaves_nrm.png"
+    },
+    {
+      "name": "island_tree_01_branches",
+      "leaf": false,
+      "albedo": "island_tree_01_branches_albedo.png",
+      "normal": "island_tree_01_branches_nrm.png"
+    }
+  ],
+  "variants": [
+    {
+      "name": "island_tree_01",
+      "height": 4.992225170135498,
+      "crown_radius": 2.847360372543335,
+      "lods": [
+        {
+          "mesh": "island_tree_01_lod0.wwm",
+          "tris": 114472
+        },
+        {
+          "mesh": "island_tree_01_lod1.wwm",
+          "tris": 56747
+        }
+      ],
+      "impostor": {
+        "albedo": "island_tree_01_imp_albedo.png",
+        "normal": "island_tree_01_imp_normal.png",
+        "grid": 8,
+        "radius": 3.13682373046875,
+        "center_z": 2.819026231765747
+      }
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "species": "quiver_tree_01",
+  "biomes": [
+    "arid"
+  ],
+  "materials": [
+    {
+      "name": "quiver_tree_01_leaf",
+      "leaf": false,
+      "albedo": "quiver_tree_01_leaf_albedo.png",
+      "normal": "quiver_tree_01_leaf_nrm.png"
+    },
+    {
+      "name": "quiver_tree_01_trunk",
+      "leaf": false,
+      "albedo": "quiver_tree_01_trunk_albedo.png",
+      "normal": "quiver_tree_01_trunk_nrm.png"
+    }
+  ],
+  "variants": [
+    {
+      "name": "quiver_tree_01",
+      "height": 2.6737284660339355,
+      "crown_radius": 0.6717420220375061,
+      "lods": [
+        {
+          "mesh": "quiver_tree_01_lod0.wwm",
+          "tris": 16816
+        },
+        {
+          "mesh": "quiver_tree_01_lod1.wwm",
+          "tris": 11478
+        }
+      ],
+      "impostor": {
+        "albedo": "quiver_tree_01_imp_albedo.png",
+        "normal": "quiver_tree_01_imp_normal.png",
+        "grid": 8,
+        "radius": 1.4152022624015808,
+        "center_z": 1.3159732818603516
+      }
+    }
+  ]
+}

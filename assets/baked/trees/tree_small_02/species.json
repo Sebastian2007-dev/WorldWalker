@@ -1,0 +1,51 @@
+{
+  "species": "tree_small_02",
+  "biomes": [
+    "broadleaf",
+    "shrub"
+  ],
+  "materials": [
+    {
+      "name": "tree_small_02_branches",
+      "leaf": false,
+      "albedo": "tree_small_02_branches_albedo.png",
+      "normal": "tree_small_02_branches_nrm.png"
+    },
+    {
+      "name": "tree_small_02_leaves",
+      "leaf": true,
+      "albedo": "tree_small_02_leaves_albedo.png",
+      "normal": "tree_small_02_leaves_nrm.png"
+    },
+    {
+      "name": "tree_small_02_trunk",
+      "leaf": false,
+      "albedo": "tree_small_02_trunk_albedo.png",
+      "normal": "tree_small_02_trunk_nrm.png"
+    }
+  ],
+  "variants": [
+    {
+      "name": "tree_small_02",
+      "height": 4.535765171051025,
+      "crown_radius": 2.9269909858703613,
+      "lods": [
+        {
+          "mesh": "tree_small_02_lod0.wwm",
+          "tris": 174920
+        },
+        {
+          "mesh": "tree_small_02_lod1.wwm",
+          "tris": 94445
+        }
+      ],
+      "impostor": {
+        "albedo": "tree_small_02_imp_albedo.png",
+        "normal": "tree_small_02_imp_normal.png",
+        "grid": 8,
+        "radius": 3.2214904832839966,
+        "center_z": 2.257824420928955
+      }
+    }
+  ]
+}

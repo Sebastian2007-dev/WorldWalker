@@ -1,0 +1,88 @@
+{
+  "species": "fir_sapling",
+  "biomes": [
+    "understory_conifer"
+  ],
+  "materials": [
+    {
+      "name": "fir_sapling_branches",
+      "leaf": false,
+      "albedo": "fir_sapling_branches_albedo.png",
+      "normal": "fir_sapling_branches_nrm.png"
+    },
+    {
+      "name": "fir_sapling_twigs",
+      "leaf": true,
+      "albedo": "fir_sapling_twigs_albedo.png",
+      "normal": "fir_sapling_twigs_nrm.png"
+    }
+  ],
+  "variants": [
+    {
+      "name": "fir_sapling_a",
+      "height": 1.3133597373962402,
+      "crown_radius": 0.49646419286727905,
+      "lods": [
+        {
+          "mesh": "fir_sapling_a_lod0.wwm",
+          "tris": 25035
+        },
+        {
+          "mesh": "fir_sapling_a_lod1.wwm",
+          "tris": 11684
+        }
+      ],
+      "impostor": {
+        "albedo": "fir_sapling_a_imp_albedo.png",
+        "normal": "fir_sapling_a_imp_normal.png",
+        "grid": 8,
+        "radius": 0.700334461927414,
+        "center_z": 0.642467200756073
+      }
+    },
+    {
+      "name": "fir_sapling_b",
+      "height": 0.9828299880027771,
+      "crown_radius": 0.48595285415649414,
+      "lods": [
+        {
+          "mesh": "fir_sapling_b_lod0.wwm",
+          "tris": 23309
+        },
+        {
+          "mesh": "fir_sapling_b_lod1.wwm",
+          "tris": 11563
+        }
+      ],
+      "impostor": {
+        "albedo": "fir_sapling_b_imp_albedo.png",
+        "normal": "fir_sapling_b_imp_normal.png",
+        "grid": 8,
+        "radius": 0.5687041139602661,
+        "center_z": 0.47578680515289307
+      }
+    },
+    {
+      "name": "fir_sapling_c",
+      "height": 0.7371892333030701,
+      "crown_radius": 0.4090482294559479,
+      "lods": [
+        {
+          "mesh": "fir_sapling_c_lod0.wwm",
+          "tris": 18694
+        },
+        {
+          "mesh": "fir_sapling_c_lod1.wwm",
+          "tris": 9461
+        }
+      ],
+      "impostor": {
+        "albedo": "fir_sapling_c_imp_albedo.png",
+        "normal": "fir_sapling_c_imp_normal.png",
+        "grid": 8,
+        "radius": 0.45148149847984315,
+        "center_z": 0.3677772879600525
+      }
+    }
+  ]
+}

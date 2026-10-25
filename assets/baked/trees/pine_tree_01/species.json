@@ -1,0 +1,112 @@
+{
+  "species": "pine_tree_01",
+  "biomes": [
+    "conifer"
+  ],
+  "materials": [
+    {
+      "name": "pine_tree_01_bark",
+      "leaf": false,
+      "albedo": "pine_tree_01_bark_albedo.png",
+      "normal": "pine_tree_01_bark_nrm.png"
+    },
+    {
+      "name": "pine_tree_01_trunk_a",
+      "leaf": false,
+      "albedo": "pine_tree_01_trunk_a_albedo.png",
+      "normal": "pine_tree_01_trunk_a_nrm.png"
+    },
+    {
+      "name": "pine_tree_01_twig",
+      "leaf": true,
+      "albedo": "pine_tree_01_twig_albedo.png",
+      "normal": "pine_tree_01_twig_nrm.png"
+    },
+    {
+      "name": "pine_tree_01_dead_branches",
+      "leaf": false,
+      "albedo": "pine_tree_01_dead_branches_albedo.png",
+      "normal": "pine_tree_01_dead_branches_nrm.png"
+    },
+    {
+      "name": "pine_tree_01_trunk_b",
+      "leaf": false,
+      "albedo": "pine_tree_01_trunk_b_albedo.png",
+      "normal": "pine_tree_01_trunk_b_nrm.png"
+    },
+    {
+      "name": "pine_tree_01_trunk_c",
+      "leaf": false,
+      "albedo": "pine_tree_01_trunk_c_albedo.png",
+      "normal": "pine_tree_01_trunk_c_nrm.png"
+    }
+  ],
+  "variants": [
+    {
+      "name": "pine_tree_01_a",
+      "height": 20.10618782043457,
+      "crown_radius": 4.66298246383667,
+      "lods": [
+        {
+          "mesh": "pine_tree_01_a_lod0.wwm",
+          "tris": 144216
+        },
+        {
+          "mesh": "pine_tree_01_a_lod1.wwm",
+          "tris": 87199
+        }
+      ],
+      "impostor": {
+        "albedo": "pine_tree_01_a_imp_albedo.png",
+        "normal": "pine_tree_01_a_imp_normal.png",
+        "grid": 8,
+        "radius": 10.534723491668702,
+        "center_z": 10.118171691894531
+      }
+    },
+    {
+      "name": "pine_tree_01_b",
+      "height": 14.832014083862305,
+      "crown_radius": 4.143152236938477,
+      "lods": [
+        {
+          "mesh": "pine_tree_01_b_lod0.wwm",
+          "tris": 98366
+        },
+        {
+          "mesh": "pine_tree_01_b_lod1.wwm",
+          "tris": 68612
+        }
+      ],
+      "impostor": {
+        "albedo": "pine_tree_01_b_imp_albedo.png",
+        "normal": "pine_tree_01_b_imp_normal.png",
+        "grid": 8,
+        "radius": 7.796099424362183,
+        "center_z": 7.353292465209961
+      }
+    },
+    {
+      "name": "pine_tree_01_c",
+      "height": 17.52750587463379,
+      "crown_radius": 4.421208381652832,
+      "lods": [
+        {
+          "mesh": "pine_tree_01_c_lod0.wwm",
+          "tris": 106697
+        },
+        {
+          "mesh": "pine_tree_01_c_lod1.wwm",
+          "tris": 67018
+        }
+      ],
+      "impostor": {
+        "albedo": "pine_tree_01_c_imp_albedo.png",
+        "normal": "pine_tree_01_c_imp_normal.png",
+        "grid": 8,
+        "radius": 9.055108909606934,
+        "center_z": 8.681532859802246
+      }
+    }
+  ]
+}

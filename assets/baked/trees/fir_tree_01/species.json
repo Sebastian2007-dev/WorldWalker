@@ -1,0 +1,112 @@
+{
+  "species": "fir_tree_01",
+  "biomes": [
+    "conifer"
+  ],
+  "materials": [
+    {
+      "name": "fir_tree_01_bark",
+      "leaf": false,
+      "albedo": "fir_tree_01_bark_albedo.png",
+      "normal": "fir_tree_01_bark_nrm.png"
+    },
+    {
+      "name": "fir_tree_01_trunk_a",
+      "leaf": false,
+      "albedo": "fir_tree_01_trunk_a_albedo.png",
+      "normal": "fir_tree_01_trunk_a_nrm.png"
+    },
+    {
+      "name": "fir_tree_01_twig",
+      "leaf": true,
+      "albedo": "fir_tree_01_twig_albedo.png",
+      "normal": "fir_tree_01_twig_nrm.png"
+    },
+    {
+      "name": "fir_tree_01_dead_branches",
+      "leaf": false,
+      "albedo": "fir_tree_01_dead_branches_albedo.png",
+      "normal": "fir_tree_01_dead_branches_nrm.png"
+    },
+    {
+      "name": "fir_tree_01_trunk_b",
+      "leaf": false,
+      "albedo": "fir_tree_01_trunk_b_albedo.png",
+      "normal": "fir_tree_01_trunk_b_nrm.png"
+    },
+    {
+      "name": "fir_tree_01_trunk_c",
+      "leaf": false,
+      "albedo": "fir_tree_01_trunk_c_albedo.png",
+      "normal": "fir_tree_01_trunk_c_nrm.png"
+    }
+  ],
+  "variants": [
+    {
+      "name": "fir_tree_01_a",
+      "height": 18.968395233154297,
+      "crown_radius": 3.5172886848449707,
+      "lods": [
+        {
+          "mesh": "fir_tree_01_a_lod0.wwm",
+          "tris": 124731
+        },
+        {
+          "mesh": "fir_tree_01_a_lod1.wwm",
+          "tris": 28482
+        }
+      ],
+      "impostor": {
+        "albedo": "fir_tree_01_a_imp_albedo.png",
+        "normal": "fir_tree_01_a_imp_normal.png",
+        "grid": 8,
+        "radius": 9.7117360496521,
+        "center_z": 9.3970947265625
+      }
+    },
+    {
+      "name": "fir_tree_01_b",
+      "height": 14.016788482666016,
+      "crown_radius": 3.2830100059509277,
+      "lods": [
+        {
+          "mesh": "fir_tree_01_b_lod0.wwm",
+          "tris": 112306
+        },
+        {
+          "mesh": "fir_tree_01_b_lod1.wwm",
+          "tris": 34013
+        }
+      ],
+      "impostor": {
+        "albedo": "fir_tree_01_b_imp_albedo.png",
+        "normal": "fir_tree_01_b_imp_normal.png",
+        "grid": 8,
+        "radius": 7.230859994888306,
+        "center_z": 6.951998710632324
+      }
+    },
+    {
+      "name": "fir_tree_01_c",
+      "height": 14.474615097045898,
+      "crown_radius": 3.59407114982605,
+      "lods": [
+        {
+          "mesh": "fir_tree_01_c_lod0.wwm",
+          "tris": 64956
+        },
+        {
+          "mesh": "fir_tree_01_c_lod1.wwm",
+          "tris": 24545
+        }
+      ],
+      "impostor": {
+        "albedo": "fir_tree_01_c_imp_albedo.png",
+        "normal": "fir_tree_01_c_imp_normal.png",
+        "grid": 8,
+        "radius": 7.485988883972168,
+        "center_z": 7.1790852546691895
+      }
+    }
+  ]
+}

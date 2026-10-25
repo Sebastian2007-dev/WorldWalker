@@ -1,0 +1,53 @@
+#version 460
+#include "common.glsl"
+
+// Eye adaptation: measures the centre weighted mean log luminance of the HDR image and moves the exposure towards
+// the value that maps it to a mid grey, smoothly over time. Result is read by tonemap.frag.
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(buffer_reference, scalar) buffer ExposureRef { float value; };
+
+layout(push_constant, scalar) uniform Push {
+    ExposureRef state;
+    uint hdr;
+    float dt;
+    uint enabled;
+} pc;
+
+shared float sumLog[256], sumW[256];
+
+void main() {
+    uint t = gl_LocalInvocationIndex;
+    float acc = 0.0, wacc = 0.0;
+    for (int j = 0; j < 4; ++j)
+        for (int i = 0; i < 4; ++i) {
+            vec2 uv = (vec2(gl_LocalInvocationID.xy) * 4.0 + vec2(i, j) + 0.5) / 64.0;
+            float w = 1.0 + 2.0 * max(1.0 - length(uv - 0.5) * 2.0, 0.0);  // what you look at matters most
+            vec3 c = textureLod(textures[nonuniformEXT(pc.hdr)], uv, 0.0).rgb;
+            acc += log2(max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 1e-4)) * w;
+            wacc += w;
+        }
+    sumLog[t] = acc;
+    sumW[t] = wacc;
+    barrier();
+    for (uint s = 128u; s > 0u; s >>= 1u) {
+        if (t < s) {
+            sumLog[t] += sumLog[t + s];
+            sumW[t] += sumW[t + s];
+        }
+        barrier();
+    }
+    if (t != 0u) return;
+    if (pc.enabled == 0u) {
+        pc.state.value = 1.0;
+        return;
+    }
+    // Only brightens: sunlit ground (mean ~0.2) and anything with sky stays at exposure 1, a shaded forest floor
+    // (~0.02) or dusk gets up to 4x brighter, like eyes adapting.
+    float avg = exp2(sumLog[0] / sumW[0]);
+    float target = clamp(0.12 / avg, 1.0, 4.0);
+    float cur = pc.state.value;
+    if (!(cur > 0.0) || cur > 100.0) cur = target;  // first frame / invalid
+    float k = 1.0 - exp(-pc.dt * 1.2);
+    pc.state.value = exp2(mix(log2(cur), log2(target), k));
+}

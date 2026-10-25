@@ -1,0 +1,50 @@
+{
+  "species": "jacaranda_tree",
+  "biomes": [
+    "tropical"
+  ],
+  "materials": [
+    {
+      "name": "jacaranda_tree_trunk",
+      "leaf": false,
+      "albedo": "jacaranda_tree_trunk_albedo.png",
+      "normal": "jacaranda_tree_trunk_nrm.png"
+    },
+    {
+      "name": "jacaranda_tree_branches",
+      "leaf": false,
+      "albedo": "jacaranda_tree_branches_albedo.png",
+      "normal": "jacaranda_tree_branches_nrm.png"
+    },
+    {
+      "name": "jacaranda_tree_leaves",
+      "leaf": true,
+      "albedo": "jacaranda_tree_leaves_albedo.png",
+      "normal": "jacaranda_tree_leaves_nrm.png"
+    }
+  ],
+  "variants": [
+    {
+      "name": "jacaranda_tree",
+      "height": 19.375699996948242,
+      "crown_radius": 12.980957984924316,
+      "lods": [
+        {
+          "mesh": "jacaranda_tree_lod0.wwm",
+          "tris": 477561
+        },
+        {
+          "mesh": "jacaranda_tree_lod1.wwm",
+          "tris": 307502
+        }
+      ],
+      "impostor": {
+        "albedo": "jacaranda_tree_imp_albedo.png",
+        "normal": "jacaranda_tree_imp_normal.png",
+        "grid": 8,
+        "radius": 14.42070505142212,
+        "center_z": 9.587297439575195
+      }
+    }
+  ]
+}

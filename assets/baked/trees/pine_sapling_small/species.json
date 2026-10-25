@@ -1,0 +1,88 @@
+{
+  "species": "pine_sapling_small",
+  "biomes": [
+    "understory_conifer"
+  ],
+  "materials": [
+    {
+      "name": "pine_sapling_small_bark",
+      "leaf": false,
+      "albedo": "pine_sapling_small_bark_albedo.png",
+      "normal": "pine_sapling_small_bark_nrm.png"
+    },
+    {
+      "name": "pine_sapling_small_twig",
+      "leaf": true,
+      "albedo": "pine_sapling_small_twig_albedo.png",
+      "normal": "pine_sapling_small_twig_nrm.png"
+    }
+  ],
+  "variants": [
+    {
+      "name": "pine_sapling_small_a",
+      "height": 1.3456101417541504,
+      "crown_radius": 0.46268272399902344,
+      "lods": [
+        {
+          "mesh": "pine_sapling_small_a_lod0.wwm",
+          "tris": 70692
+        },
+        {
+          "mesh": "pine_sapling_small_a_lod1.wwm",
+          "tris": 38803
+        }
+      ],
+      "impostor": {
+        "albedo": "pine_sapling_small_a_imp_albedo.png",
+        "normal": "pine_sapling_small_a_imp_normal.png",
+        "grid": 8,
+        "radius": 0.6700026047229767,
+        "center_z": 0.6339945197105408
+      }
+    },
+    {
+      "name": "pine_sapling_small_b",
+      "height": 1.1219854354858398,
+      "crown_radius": 0.41288289427757263,
+      "lods": [
+        {
+          "mesh": "pine_sapling_small_b_lod0.wwm",
+          "tris": 61016
+        },
+        {
+          "mesh": "pine_sapling_small_b_lod1.wwm",
+          "tris": 38838
+        }
+      ],
+      "impostor": {
+        "albedo": "pine_sapling_small_b_imp_albedo.png",
+        "normal": "pine_sapling_small_b_imp_normal.png",
+        "grid": 8,
+        "radius": 0.5334883940219879,
+        "center_z": 0.5237196683883667
+      }
+    },
+    {
+      "name": "pine_sapling_small_c",
+      "height": 0.9615074992179871,
+      "crown_radius": 0.343320369720459,
+      "lods": [
+        {
+          "mesh": "pine_sapling_small_c_lod0.wwm",
+          "tris": 61363
+        },
+        {
+          "mesh": "pine_sapling_small_c_lod1.wwm",
+          "tris": 36040
+        }
+      ],
+      "impostor": {
+        "albedo": "pine_sapling_small_c_imp_albedo.png",
+        "normal": "pine_sapling_small_c_imp_normal.png",
+        "grid": 8,
+        "radius": 0.490496740937233,
+        "center_z": 0.4813500940799713
+      }
+    }
+  ]
+}
