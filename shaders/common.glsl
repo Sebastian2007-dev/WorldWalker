@@ -226,7 +226,7 @@ float sunShadow(FrameRef f, vec3 rel, vec3 n, float biasScale) {
     vec4 s = f.shadowMat[c] * vec4(rel + nl * texel * 1.5 + f.sunDir * texel, 1.0);
     // Tent filtered PCF over 3x3 texels from four gathers: weights fall off with the sub-texel position, so light
     // through small canopy gaps becomes soft spots instead of square texels.
-    const float atlasSize = 4096.0;
+    float atlasSize = float(textureSize(textures[nonuniformEXT(f.shadowMap)], 0).x);  // depends on shadow quality
     vec2 tc = s.xy * atlasSize - 0.5;
     vec2 base = floor(tc), fr = tc - base;
     vec4 wx = vec4(1.0 - fr.x, 1.0, 1.0, fr.x), wy = vec4(1.0 - fr.y, 1.0, 1.0, fr.y);

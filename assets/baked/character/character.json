@@ -1,0 +1,121 @@
+{
+  "mesh": "character.wwc",
+  "materials": [
+    {
+      "name": "body",
+      "albedo": "body_albedo.png",
+      "normal": "body_nrm.png",
+      "alphaTest": false
+    },
+    {
+      "name": "hair",
+      "albedo": "hair_albedo.png",
+      "normal": "hair_nrm.png",
+      "alphaTest": true
+    }
+  ],
+  "clips": [
+    {
+      "name": "falling_idle",
+      "file": "falling_idle.wwa",
+      "frames": 22,
+      "fps": 30.0
+    },
+    {
+      "name": "hard_landing",
+      "file": "hard_landing.wwa",
+      "frames": 61,
+      "fps": 30.0
+    },
+    {
+      "name": "idle",
+      "file": "idle.wwa",
+      "frames": 250,
+      "fps": 30.0
+    },
+    {
+      "name": "jump",
+      "file": "jump.wwa",
+      "frames": 66,
+      "fps": 30.0
+    },
+    {
+      "name": "kneeling_idle",
+      "file": "kneeling_idle.wwa",
+      "frames": 129,
+      "fps": 30.0
+    },
+    {
+      "name": "left_strafe",
+      "file": "left_strafe.wwa",
+      "frames": 21,
+      "fps": 30.0
+    },
+    {
+      "name": "left_strafe_walking",
+      "file": "left_strafe_walking.wwa",
+      "frames": 32,
+      "fps": 30.0
+    },
+    {
+      "name": "left_turn",
+      "file": "left_turn.wwa",
+      "frames": 50,
+      "fps": 30.0
+    },
+    {
+      "name": "left_turn_90",
+      "file": "left_turn_90.wwa",
+      "frames": 28,
+      "fps": 30.0
+    },
+    {
+      "name": "right_strafe",
+      "file": "right_strafe.wwa",
+      "frames": 21,
+      "fps": 30.0
+    },
+    {
+      "name": "right_strafe_walking",
+      "file": "right_strafe_walking.wwa",
+      "frames": 32,
+      "fps": 30.0
+    },
+    {
+      "name": "right_turn",
+      "file": "right_turn.wwa",
+      "frames": 50,
+      "fps": 30.0
+    },
+    {
+      "name": "right_turn_90",
+      "file": "right_turn_90.wwa",
+      "frames": 29,
+      "fps": 30.0
+    },
+    {
+      "name": "running",
+      "file": "running.wwa",
+      "frames": 22,
+      "fps": 30.0
+    },
+    {
+      "name": "running_backward",
+      "file": "running_backward.wwa",
+      "frames": 20,
+      "fps": 30.0
+    },
+    {
+      "name": "walking",
+      "file": "walking.wwa",
+      "frames": 32,
+      "fps": 30.0
+    },
+    {
+      "name": "walking_backwards",
+      "file": "walking_backwards.wwa",
+      "frames": 37,
+      "fps": 30.0
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+# Material definition for elvs_inverted_curlybob1
+
+name elvs_inverted_curlybob1
+description Elvs_inverted_curlybob1 material
+ambientColor 0.525490196078 0.525490196078 0.525490196078
+diffuseColor 1.0 1.0 1.0
+specularColor 0.5 0.5 0.5
+shininess 0.1
+emissiveColor 0.0 0.0 0.0
+opacity 1.0
+translucency 0.0
+
+shadeless False
+wireframe False
+transparent True
+alphaToCoverage True
+backfaceCull False
+depthless False
+
+castShadows True
+
+receiveShadows True
+
+diffuseTexture elvs_inverted_curlybob1.png
+
+shader shaders/glsl/litsphere
+
+shaderParam litsphereTexture litspheres/lit_refl_sharp_aniso_hard_blonde.png
+
+shaderConfig ambientOcclusion True
+shaderConfig normal True
+shaderConfig bump True
+shaderConfig displacement True
+shaderConfig vertexColors True
+shaderConfig spec True
+shaderConfig transparency True
+shaderConfig diffuse True

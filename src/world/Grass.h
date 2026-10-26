@@ -28,7 +28,8 @@ public:
     // Rebuilds the field in the background when the camera wandered off its centre.
     void update(const glm::dvec3& camEcef);
     // Draws inside the main render pass.
-    void draw(VkCommandBuffer cmd, VkDeviceAddress frameData, const glm::dvec3& camEcef);
+    // density 0..1 thins the blade grid and pulls in the radius (lower graphics qualities).
+    void draw(VkCommandBuffer cmd, VkDeviceAddress frameData, const glm::dvec3& camEcef, float density = 1.0f);
 
 private:
     struct Field {

@@ -1,6 +1,10 @@
 #include "world/WorldData.h"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
+#include <unordered_set>
+#include <vector>
 
 #include "geo/Geodesy.h"
 
@@ -76,6 +80,52 @@ bool WorldData::tryMeshHeight(double lat, double lon, double& out) {
 double WorldData::heightForSpacing(double lat, double lon, double spacingDeg) {
     if (spacingDeg <= kDetailSpacingDeg) return groundHeight(lat, lon);
     return dem_.height(lat, lon, dem_.levelForSpacing(spacingDeg * 0.5));
+}
+
+double WorldData::lakeLevel(double lat, double lon) {
+    const double step = kLakeGridDeg;
+    auto key = [](int64_t y, int64_t x) { return (uint64_t(y) << 32) | uint64_t(uint32_t(x)); };
+    auto water = [&](int64_t y, int64_t x) {
+        return landCover(-90.0 + (double(y) + 0.5) * step, -180.0 + (double(x) + 0.5) * step) == data::lc::Water;
+    };
+    int64_t gy = int64_t(std::floor((lat + 90.0) / step)), gx = int64_t(std::floor((lon + 180.0) / step));
+    {
+        std::lock_guard<std::mutex> lock(lakeMutex_);
+        if (auto it = lakeCells_.find(key(gy, gx)); it != lakeCells_.end()) return it->second;
+    }
+    // The point may sit just beside the water at this grid's resolution: start from a water cell next to it.
+    int64_t sy = gy, sx = gx;
+    bool found = water(gy, gx);
+    for (int dy = -1; dy <= 1 && !found; ++dy)
+        for (int dx = -1; dx <= 1 && !found; ++dx)
+            if (water(gy + dy, gx + dx)) sy = gy + dy, sx = gx + dx, found = true;
+    if (!found) return std::numeric_limits<double>::quiet_NaN();
+    // Many chunks of one lake are built in parallel; without this they would all flood fill the same lake.
+    std::lock_guard<std::mutex> fill(lakeFillMutex_);
+    {
+        std::lock_guard<std::mutex> lock(lakeMutex_);
+        if (auto it = lakeCells_.find(key(sy, sx)); it != lakeCells_.end()) return it->second;
+    }
+    // Flood fill the connected water and take a low percentile of the DEM over it: lake surfaces in the DEM are not
+    // flat, and the cover map reaches a little onto the banks. Huge lakes and long rivers stop at a cell budget.
+    const size_t kMaxCells = 60000;
+    std::vector<std::pair<int64_t, int64_t>> queue{{sy, sx}};
+    std::unordered_set<uint64_t> seen{key(sy, sx)};
+    std::vector<double> heights;
+    for (size_t i = 0; i < queue.size() && queue.size() < kMaxCells; ++i) {
+        auto [y, x] = queue[i];
+        heights.push_back(dem_.height(-90.0 + (double(y) + 0.5) * step, -180.0 + (double(x) + 0.5) * step, 0));
+        const int64_t ny[4] = {y + 1, y - 1, y, y}, nx[4] = {x, x, x + 1, x - 1};
+        for (int k = 0; k < 4; ++k)
+            if (seen.insert(key(ny[k], nx[k])).second && water(ny[k], nx[k])) queue.push_back({ny[k], nx[k]});
+    }
+    size_t q = heights.size() / 4;
+    std::nth_element(heights.begin(), heights.begin() + q, heights.end());
+    float level = float(heights[q]);
+    std::lock_guard<std::mutex> lock(lakeMutex_);
+    if (lakeCells_.size() > 4000000) lakeCells_.clear();  // a long journey: forget lakes far behind
+    for (auto [y, x] : queue) lakeCells_.emplace(key(y, x), level);
+    return lakeCells_.at(key(sy, sx));
 }
 
 uint8_t WorldData::landCover(double lat, double lon, double spacingDeg) {

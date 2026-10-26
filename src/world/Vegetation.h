@@ -52,6 +52,9 @@ public:
     void shutdown();
 
     void update(const glm::dvec3& camEcef, double camLat, double camLon, float radius);
+    // Largest radius whose cells fit into kMaxCells at this latitude (cells narrow towards the poles). Beyond it
+    // slots run out and cells, near ones included, would be missing.
+    static float maxRadius(double camLat);
     // Uploads this frame's camera relative cell table; call once per frame before cull().
     void beginFrame(uint32_t frameIndex, const glm::dvec3& camEcef);
     // Compute pass for one view (0 = camera, 1..kShadowViews = shadow cascades); outside of a render pass.
@@ -78,6 +81,7 @@ private:
         glm::dvec3 origin{0};
         glm::vec3 east{1, 0, 0}, north{0, 1, 0}, up{0, 0, 1};
         std::vector<render::TreeInstance> instances;
+        std::vector<uint32_t> variantCounts;  // instances per variant, for the per-frame capacity budget
     };
 
     void loadAssets(const std::filesystem::path& dir);

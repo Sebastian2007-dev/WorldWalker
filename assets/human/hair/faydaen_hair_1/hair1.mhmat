@@ -1,0 +1,22 @@
+# This is a clothes file for MakeHuman Community, exported by MakeClothes 2
+#
+# author: unknown
+# license: CC0
+#
+name hair1 material
+
+// Color shading attributes
+diffuseColor  0.5880 0.5880 0.5880
+specularColor  0.1414 0.1414 0.1414
+shininess 0.1414
+opacity 1
+
+// Textures
+
+diffuseTexture hair.png
+// Settings
+
+transparent False
+alphaToCoverage True
+backfaceCull False
+depthless False

@@ -164,6 +164,20 @@ bool toggleRow(const char* label, const char* id, bool* v) {
     rowLabel(label);
     return toggle(id, v);
 }
+// Combo box in the right column; returns true when the selection changed.
+bool choiceRow(const char* label, const char* id, const char* const* items, int count, int* v) {
+    rowLabel(label);
+    bool changed = false;
+    if (ImGui::BeginCombo(id, items[std::clamp(*v, 0, count - 1)])) {
+        for (int i = 0; i < count; ++i)
+            if (ImGui::Selectable(items[i], i == *v)) {
+                changed = *v != i;
+                *v = i;
+            }
+        ImGui::EndCombo();
+    }
+    return changed;
+}
 void sectionHeader(const char* text) {
     ImGui::Dummy(ImVec2(0, S(6)));
     ImGui::PushFont(g_fonts.small);
@@ -214,6 +228,20 @@ bool action(const char* label,float width) { return menuItem(label,width,g_fonts
 void muted(const char* text) {
     ImGui::PushFont(g_fonts.small); ImGui::TextDisabled("%s",text); ImGui::PopFont();
 }
+float row(const char* label) { rowLabel(label); return g_fieldW; }
+bool toggle(const char* label,const char* id,bool* value) { return toggleRow(label,id,value); }
+bool swatch(const char* id,const float rgb[3],bool active,float size) {
+    ImVec2 pos=ImGui::GetCursorScreenPos();
+    bool pressed=ImGui::InvisibleButton(id,ImVec2(size,size));
+    bool hovered=ImGui::IsItemHovered();
+    auto* dl=ImGui::GetWindowDrawList();
+    ImVec2 c=pos+ImVec2(size,size)*0.5f;
+    ImVec4 fill=linear(ImVec4(rgb[0],rgb[1],rgb[2],ImGui::GetStyle().Alpha));
+    if(active || hovered) dl->AddCircle(c,size*0.5f-S(1),col(active?kAccent:0xFFFFFF,active?1.0f:0.35f),0,S(2));
+    dl->AddCircleFilled(c,size*0.5f-S(5),ImGui::ColorConvertFloat4ToU32(fill));
+    dl->AddCircle(c,size*0.5f-S(5),col(0xFFFFFF,0.18f));
+    return pressed;
+}
 void backdrop(float edge) {
     ImVec2 vs=ImGui::GetIO().DisplaySize;
     auto* dl=ImGui::GetWindowDrawList();
@@ -248,6 +276,40 @@ bool choice(const char* id,const char* title,const char* description,bool active
 
 // ---------------------------------------------------------------- settings file
 
+void applyQuality(int quality, render::SceneParams& p) {
+    struct Preset {
+        float scale; bool dynamic; float fps; int shadows; float grass, terrain, trees, treeDistance; bool ssao;
+    };
+    // Low keeps TAA: it smooths the upscaled image and the dithered hair. Low also adapts its resolution to hold 30 FPS.
+    static const Preset kPresets[] = {
+        {0.7f, true, 30.0f, 0, 0.3f, 0.7f, 0.6f, 900.0f, false},     // Niedrig
+        {0.85f, false, 60.0f, 1, 0.6f, 0.85f, 0.8f, 1500.0f, true},  // Mittel
+        {1.0f, false, 60.0f, 2, 1.0f, 1.0f, 1.0f, 2000.0f, true},    // Hoch
+        {1.0f, false, 60.0f, 2, 1.0f, 1.3f, 1.3f, 2600.0f, true},    // Ultra
+    };
+    if (quality < kQualityLow || quality > kQualityUltra) return;
+    const Preset& q = kPresets[quality];
+    p.renderScale = q.scale;
+    p.dynamicResolution = q.dynamic;
+    p.targetFps = q.fps;
+    p.shadows = true;
+    p.shadowQuality = q.shadows;
+    p.grass = true;
+    p.grassDensity = q.grass;
+    p.terrainDetail = q.terrain;
+    p.treeDetail = q.trees;
+    p.impostorDistance = q.treeDistance;
+    p.ssao = q.ssao;
+    p.taa = true;
+}
+
+int detectQuality(bool integratedGpu, uint64_t deviceLocalBytes) {
+    const uint64_t gib = 1ull << 30;
+    if (integratedGpu || deviceLocalBytes < 3 * gib) return kQualityLow;
+    if (deviceLocalBytes < 6 * gib) return kQualityMedium;
+    return kQualityHigh;
+}
+
 void loadSettings(const std::filesystem::path& file, Settings& s, render::SceneParams& p, game::Player& player) {
     std::ifstream in(file);
     if (!in) return;
@@ -265,6 +327,23 @@ void loadSettings(const std::filesystem::path& file, Settings& s, render::SceneP
     get("crosshair", s.crosshair);
     get("invertY", s.invertY);
     get("fullscreen", s.fullscreen);
+    get("quality", s.quality);
+    get("vsync", s.vsync);
+    get("fpsLimit", s.fpsLimit);
+    get("renderScale", p.renderScale);
+    get("dynamicResolution", p.dynamicResolution);
+    get("targetFps", p.targetFps);
+    get("shadowQuality", p.shadowQuality);
+    get("grassDensity", p.grassDensity);
+    get("terrainDetail", p.terrainDetail);
+    get("treeDetail", p.treeDetail);
+    p.renderScale = std::clamp(p.renderScale, 0.5f, 1.0f);
+    p.targetFps = std::clamp(p.targetFps, 30.0f, 144.0f);
+    p.shadowQuality = std::clamp(p.shadowQuality, 0, 2);
+    p.grassDensity = std::clamp(p.grassDensity, 0.0f, 1.0f);
+    p.terrainDetail = std::clamp(p.terrainDetail, 0.5f, 1.5f);
+    p.treeDetail = std::clamp(p.treeDetail, 0.5f, 1.5f);
+    s.quality = std::clamp(s.quality, -1, int(kQualityCustom));
     get("timeOfDay", p.timeOfDay);
     get("dayOfYear", p.dayOfYear);
     get("exposure", p.exposure);
@@ -289,6 +368,16 @@ void saveSettings(const std::filesystem::path& file, const Settings& s, const re
         {"crosshair", s.crosshair},
         {"invertY", s.invertY},
         {"fullscreen", s.fullscreen},
+        {"quality", s.quality},
+        {"vsync", s.vsync},
+        {"fpsLimit", s.fpsLimit},
+        {"renderScale", p.renderScale},
+        {"dynamicResolution", p.dynamicResolution},
+        {"targetFps", p.targetFps},
+        {"shadowQuality", p.shadowQuality},
+        {"grassDensity", p.grassDensity},
+        {"terrainDetail", p.terrainDetail},
+        {"treeDetail", p.treeDetail},
         {"timeOfDay", p.timeOfDay},
         {"dayOfYear", p.dayOfYear},
         {"exposure", p.exposure},
@@ -616,17 +705,67 @@ void PauseMenu::drawOptions(GLFWwindow* window, Settings& s, render::SceneParams
     char fmt[64];
     switch (tab_) {
         case 0: {
+            sectionHeader("QUALIT\xC3\x84T");
+            static const char* kQualities[] = {"Niedrig", "Mittel", "Hoch", "Ultra", "Benutzerdefiniert"};
+            int quality = std::clamp(s.quality, 0, int(kQualityCustom));
+            if (choiceRow("Voreinstellung", "##quality", kQualities, 5, &quality) && quality != kQualityCustom) {
+                applyQuality(quality, p);
+                s.quality = quality;
+            }
+            if (!s.gpu.empty()) {
+                ImGui::PushFont(g_fonts.small);
+                ImGui::TextDisabled("Grafikkarte: %s", s.gpu.c_str());
+                ImGui::PopFont();
+            }
+            // Any individual change turns the preset into "Benutzerdefiniert".
+            bool custom = false;
+            float percent = p.renderScale * 100.0f;
+            if (sliderRow("Renderaufl\xC3\xB6sung", "##scale", &percent, 50.0f, 100.0f, "%.0f %%")) {
+                p.renderScale = std::round(percent / 5.0f) * 0.05f;
+                custom = true;
+            }
+            custom |= toggleRow("Dynamische Aufl\xC3\xB6sung", "##dynres", &p.dynamicResolution);
+            if (p.dynamicResolution) custom |= sliderRow("Ziel-Bildrate", "##target", &p.targetFps, 30.0f, 144.0f, "%.0f FPS");
+            static const char* kShadows[] = {"Aus", "Niedrig", "Mittel", "Hoch"};
+            int shadows = p.shadows ? p.shadowQuality + 1 : 0;
+            if (choiceRow("Schatten", "##shadowq", kShadows, 4, &shadows)) {
+                p.shadows = shadows > 0;
+                if (shadows > 0) p.shadowQuality = shadows - 1;
+                custom = true;
+            }
+            custom |= toggleRow("Gras", "##grass", &p.grass);
+            if (p.grass) {
+                float grass = p.grassDensity * 100.0f;
+                if (sliderRow("Grasdichte", "##grassd", &grass, 0.0f, 100.0f, "%.0f %%")) {
+                    p.grassDensity = grass / 100.0f;
+                    custom = true;
+                }
+            }
+            float terrainDetail = p.terrainDetail * 100.0f, treeDetail = p.treeDetail * 100.0f;
+            if (sliderRow("Gel\xC3\xA4ndedetails", "##terrain", &terrainDetail, 50.0f, 150.0f, "%.0f %%")) {
+                p.terrainDetail = terrainDetail / 100.0f;
+                custom = true;
+            }
+            if (sliderRow("Baumdetails", "##treed", &treeDetail, 50.0f, 150.0f, "%.0f %%")) {
+                p.treeDetail = treeDetail / 100.0f;
+                custom = true;
+            }
+            custom |= toggleRow("Kantengl\xC3\xA4ttung (TAA)", "##taa", &p.taa);
+            custom |= toggleRow("Umgebungsverdeckung (SSAO)", "##ssao", &p.ssao);
             sectionHeader("DARSTELLUNG");
             sliderRow("Sichtfeld", "##fov", &p.fovDeg, 50.0f, 100.0f, "%.0f\xC2\xB0");
             toggleRow("Automatische Belichtung", "##autoexp", &p.autoExposure);
             sliderRow("Belichtung", "##exp", &p.exposure, 0.2f, 4.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
             if (toggleRow("Vollbild", "##full", &s.fullscreen)) setFullscreen(window, s.fullscreen);
-            toggleRow("Schatten", "##shadows", &p.shadows);
-            toggleRow("Gras", "##grass", &p.grass);
-            toggleRow("Kantengl\xC3\xA4ttung (TAA)", "##taa", &p.taa);
-            toggleRow("Umgebungsverdeckung (SSAO)", "##ssao", &p.ssao);
+            toggleRow("VSync", "##vsync", &s.vsync);
+            static const char* kLimits[] = {"Aus", "30 FPS", "60 FPS", "120 FPS", "144 FPS"};
+            static const int kLimitValues[] = {0, 30, 60, 120, 144};
+            int limit = 0;
+            for (int i = 0; i < 5; ++i) if (kLimitValues[i] == s.fpsLimit) limit = i;
+            if (choiceRow("Bildraten-Limit", "##fpslimit", kLimits, 5, &limit)) s.fpsLimit = kLimitValues[limit];
             sectionHeader("SICHTWEITE");
-            sliderRow("B\xC3\xA4ume", "##trees", &p.impostorDistance, 300.0f, 4000.0f, "%.0f m");
+            custom |= sliderRow("B\xC3\xA4ume", "##trees", &p.impostorDistance, 300.0f, 3000.0f, "%.0f m");
+            if (custom) s.quality = kQualityCustom;
             float vis = 1.0f / p.fogDensity / 1000.0f;
             if (sliderRow("Dunst", "##fog", &vis, 2.0f, 200.0f, "%.0f km", ImGuiSliderFlags_Logarithmic))
                 p.fogDensity = 1.0f / (vis * 1000.0f);

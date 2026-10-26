@@ -13,4 +13,8 @@ void section(const char* text);
 bool action(const char* label, float width);
 bool choice(const char* id, const char* title, const char* description, bool active, float width);
 void muted(const char* text);
+float row(const char* label);  // label in the left column; returns the right column's width for the next item
+bool toggle(const char* label, const char* id, bool* value);
+// Colour chip (sRGB) with an accent ring when active.
+bool swatch(const char* id, const float rgb[3], bool active, float size);
 }

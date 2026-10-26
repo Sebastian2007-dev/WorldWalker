@@ -44,8 +44,13 @@ void main() {
 
         float lodDist = dist / f.lodScale;
         uint lod = max(lodDist < 8.0 + h * 0.8 ? 0u : (lodDist < 15.0 + h * 1.6 ? 1u : 2u), pc.minLod);
-        uint bucket = t.variant * 3u + lod;
-        uint slot = atomicAdd(pc.counters.d[bucket], 1u);
+        // A full bucket (many trees close by, or a higher tree detail setting) falls back to the next coarser LOD
+        // instead of dropping the tree. tree_cmds.comp clamps the counters to the capacities.
+        uint slot = atomicAdd(pc.counters.d[t.variant * 3u + lod], 1u);
+        while (slot >= pc.caps[lod] && lod < 2u) {
+            ++lod;
+            slot = atomicAdd(pc.counters.d[t.variant * 3u + lod], 1u);
+        }
         if (slot >= pc.caps[lod]) continue;
         uint base = t.variant * perVariant + (lod > 0u ? pc.caps[0] : 0u) + (lod > 1u ? pc.caps[1] : 0u);
 

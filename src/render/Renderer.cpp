@@ -114,13 +114,25 @@ void Renderer::init(gfx::Device& dev, gfx::Bindless& bindless, GLFWwindow* windo
     groundAlbedo_ = loadTex(assetDir / "baked" / "ground" / "grass_ground_albedo.png", true);
     groundNormal_ = loadTex(assetDir / "baked" / "ground" / "grass_ground_nrm.png", false);
     createTargets();
+    createShadowAtlas(kShadowTile);
+    {
+        uint32_t qn = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(dev.physical(), &qn, nullptr);
+        std::vector<VkQueueFamilyProperties> qs(qn);
+        vkGetPhysicalDeviceQueueFamilyProperties(dev.physical(), &qn, qs.data());
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(dev.physical(), &props);
+        if (qs[dev.queueFamily()].timestampValidBits > 0 && props.limits.timestampPeriod > 0.0f) {
+            timestampMs_ = props.limits.timestampPeriod * 1e-6f;
+            VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+            qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            qi.queryCount = kStamps * gfx::kFramesInFlight;
+            VK_CHECK(vkCreateQueryPool(dev.device(), &qi, nullptr, &queryPool_));
+        }
+    }
     for (auto& b : frameBuffers_)
         b = dev.createBuffer(sizeof(FrameData) * (1 + kCascades), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                              VMA_MEMORY_USAGE_CPU_TO_GPU, true);
-    shadow_ = dev.createImage({kShadowTile * 2, kShadowTile * 2}, depthFormat(),
-                              VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1,
-                              VK_IMAGE_ASPECT_DEPTH_BIT);
-    shadowIndex_ = bindless.add(shadow_, bindless.linearClamp());
     skyLut_ = dev.createImage({kSkyLutW, kSkyLutH}, VK_FORMAT_R16G16B16A16_SFLOAT,
                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     skyLutIndex_ = bindless.add(skyLut_, bindless.linearClamp());
@@ -136,6 +148,12 @@ void Renderer::init(gfx::Device& dev, gfx::Bindless& bindless, GLFWwindow* windo
     d.polygonMode = VK_POLYGON_MODE_LINE;
     terrainWire_ = gfx::createGraphicsPipeline(dev, layout, d);
     d.polygonMode = VK_POLYGON_MODE_FILL;
+
+    d.vs = "water.vert";
+    d.fs = "water.frag";
+    d.alphaBlend = true;
+    waterPipe_ = gfx::createGraphicsPipeline(dev, layout, d);
+    d.alphaBlend = false;
 
     d.vs = "character.vert";
     d.fs = "character.frag";
@@ -233,8 +251,63 @@ void Renderer::init(gfx::Device& dev, gfx::Bindless& bindless, GLFWwindow* windo
     ImGui_ImplVulkan_Init(&ii);
 }
 
+void Renderer::stamp(VkCommandBuffer cmd, uint32_t frameIndex, uint32_t i) {
+    if (queryPool_) vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, queryPool_, frameIndex * kStamps + i);
+}
+
+// The frame slot's fence has been waited for, so the stamps it wrote last time are complete.
+void Renderer::readTimestamps(uint32_t frameIndex) {
+    if (!queryPool_ || !stampsWritten_[frameIndex]) return;
+    uint64_t t[kStamps];
+    if (vkGetQueryPoolResults(dev_->device(), queryPool_, frameIndex * kStamps, kStamps, sizeof(t), t, sizeof(uint64_t),
+                              VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
+        return;
+    auto ms = [&](int a, int b) { return t[b] >= t[a] ? float(t[b] - t[a]) * timestampMs_ : 0.0f; };
+    const float k = 0.1f;  // smoothing
+    auto blend = [&](float& v, float x) { v += (x - v) * k; };
+    blend(gpuTimes_.shadows, ms(0, 1));
+    blend(gpuTimes_.scene, ms(1, 2));
+    blend(gpuTimes_.ssao, ms(2, 3));
+    blend(gpuTimes_.taa, ms(3, 4));
+    blend(gpuTimes_.post, ms(4, 5));
+    blend(gpuTimes_.total, ms(0, 5));
+}
+
+void Renderer::createShadowAtlas(uint32_t tile) {
+    if (shadow_.image) {
+        dev_->destroyLater(shadow_);
+        bindless_->release(shadowIndex_);
+    }
+    shadowTile_ = tile;
+    shadow_ = dev_->createImage({tile * 2, tile * 2}, depthFormat(),
+                                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1,
+                                VK_IMAGE_ASPECT_DEPTH_BIT);
+    shadowIndex_ = bindless_->add(shadow_, bindless_->linearClamp());
+}
+
+// Lowers the 3D resolution in 5 % steps while frames take longer than the target and raises it again once there is
+// clear headroom. Steps are rare (hysteresis) because every change recreates the render targets and restarts TAA.
+void Renderer::updateDynamicResolution(const SceneParams& params, float dt) {
+    if (!params.dynamicResolution || dt <= 0.0f) {
+        dynamicScale_ = 1.0f;
+        return;
+    }
+    frameMs_ = frameMs_ > 0.0f ? frameMs_ + (dt * 1000.0f - frameMs_) * 0.1f : dt * 1000.0f;
+    sinceScaleChange_ += dt;
+    float target = 1000.0f / std::max(params.targetFps, 10.0f);
+    if (frameMs_ > target * 1.08f && sinceScaleChange_ > 0.5f && dynamicScale_ > 0.5f) {
+        dynamicScale_ = std::max(0.5f, dynamicScale_ - 0.05f);
+        sinceScaleChange_ = 0.0f;
+    } else if (frameMs_ < target * 0.8f && sinceScaleChange_ > 2.0f && dynamicScale_ < 1.0f) {
+        dynamicScale_ = std::min(1.0f, dynamicScale_ + 0.05f);
+        sinceScaleChange_ = 0.0f;
+    }
+}
+
 void Renderer::createTargets() {
-    targetExtent_ = dev_->swapExtent();
+    VkExtent2D full = dev_->swapExtent();
+    targetExtent_ = {std::max(64u, uint32_t(float(full.width) * scale_ + 0.5f)),
+                     std::max(64u, uint32_t(float(full.height) * scale_ + 0.5f))};
     hdr_ = dev_->createImage(targetExtent_, hdrFormat(), VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     depth_ = dev_->createImage(targetExtent_, depthFormat(),
                                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1,
@@ -251,6 +324,7 @@ void Renderer::createTargets() {
 }
 
 void Renderer::destroyTargets() {
+    for (uint32_t index : {hdrIndex_, depthIndex_, historyIndex_[0], historyIndex_[1], aoIndex_}) bindless_->release(index);
     dev_->destroyLater(hdr_);
     dev_->destroyLater(depth_);
     for (auto& h : history_) dev_->destroyLater(h);
@@ -262,10 +336,11 @@ void Renderer::shutdown() {
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
     vkDestroyDescriptorPool(dev_->device(), imguiPool_, nullptr);
-    for (VkPipeline p : {terrainPipe_, terrainWire_, terrainShadowPipe_, skyLutPipe_, taaPipe_, ssaoPipe_, exposurePipe_, skyPipe_, tonemapPipe_,
+    for (VkPipeline p : {terrainPipe_, terrainWire_, waterPipe_, terrainShadowPipe_, skyLutPipe_, taaPipe_, ssaoPipe_, exposurePipe_, skyPipe_, tonemapPipe_,
                          characterPipe_})
         vkDestroyPipeline(dev_->device(), p, nullptr);
     for (auto& b : frameBuffers_) dev_->destroyNow(b);
+    if (queryPool_) vkDestroyQueryPool(dev_->device(), queryPool_, nullptr);
     dev_->destroyNow(sphereVerts_);
     dev_->destroyNow(sphereIdx_);
     dev_->destroyNow(captureBuffer_);
@@ -321,12 +396,23 @@ void Renderer::drawCharacter(VkCommandBuffer cmd, VkDeviceAddress frame, const g
 void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::Terrain& terrain,
                       world::Vegetation& veg, world::Grass& grass, Character& character, const SceneParams& params,
                       float time) {
-    if (targetExtent_.width != dev_->swapExtent().width || targetExtent_.height != dev_->swapExtent().height) {
+    float dt = std::clamp(time - lastTime_, 0.0f, 0.25f);
+    updateDynamicResolution(params, dt);
+    float scale = std::clamp(std::round(params.renderScale * dynamicScale_ * 20.0f) / 20.0f, 0.25f, 1.0f);
+    VkExtent2D full = dev_->swapExtent();
+    if (scale != scale_ || std::max(64u, uint32_t(float(full.width) * scale + 0.5f)) != targetExtent_.width ||
+        std::max(64u, uint32_t(float(full.height) * scale + 0.5f)) != targetExtent_.height) {
+        scale_ = scale;
         destroyTargets();
         createTargets();
     }
+    const uint32_t wantTile = params.shadowQuality <= 0 ? kShadowTile / 2 : kShadowTile;
+    if (wantTile != shadowTile_) createShadowAtlas(wantTile);
     VkCommandBuffer cmd = fc.cmd;
     VkExtent2D ext = targetExtent_;
+    readTimestamps(fc.frameIndex);
+    if (queryPool_) vkCmdResetQueryPool(cmd, queryPool_, fc.frameIndex * kStamps, kStamps);
+    stamp(cmd, fc.frameIndex, 0);
 
     // ---- frame constants
     glm::dvec3 cam = player.cameraPos();
@@ -397,7 +483,7 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
     fd.camForward = fwd;
     fd.exposure = params.exposure;
     fd.viewport = glm::vec2(ext.width, ext.height);
-    fd.lodScale = 1.0f;
+    fd.lodScale = params.treeDetail;
     fd.impostorDistance = params.impostorDistance;
     fd.groundAlbedo = groundAlbedo_;
     fd.groundNormal = groundNormal_;
@@ -409,7 +495,9 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
     // not shimmer while walking. Depth is reversed: 1 = towards the sun.
     const float splits[kCascades + 1] = {zNear, 10.0f, 35.0f, 100.0f, 300.0f};
     // Far cascades use a quarter of their tile: dense forest seen from the sun is mostly alpha-tested overdraw.
-    const uint32_t shadowRes[kCascades] = {kShadowTile, kShadowTile, kShadowTile / 2, kShadowTile / 2};
+    const uint32_t shadowRes[kCascades] = {shadowTile_, shadowTile_, shadowTile_ / 2, shadowTile_ / 2};
+    // Lower qualities skip the last cascade: shadows end at 100 m.
+    const uint32_t cascades = params.shadowQuality >= 2 ? kCascades : kCascades - 1;
     const float casterReach = 2000.0f;  // how far towards the sun casters (mountains) are still captured
     // Trees only throw shadows as long as their height allows at this sun elevation.
     float sunTan = glm::dot(fd.sunDir, up) / std::max(std::sqrt(1.0f - glm::dot(fd.sunDir, up) * glm::dot(fd.sunDir, up)), 1e-3f);
@@ -443,7 +531,7 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
         setRow(3, glm::vec3(0), 1.0f);
         // Clip space [-1,1] -> this cascade's tile in the 2x2 atlas.
         glm::mat4 tile(1.0f);
-        float scale = 0.5f * float(shadowRes[c]) / float(kShadowTile * 2);
+        float scale = 0.5f * float(shadowRes[c]) / float(shadowTile_ * 2);
         tile[0][0] = tile[1][1] = scale;
         tile[3] = glm::vec4(scale + 0.5f * float(c & 1), scale + 0.5f * float(c >> 1), 0.0f, 1.0f);
         fd.shadowMat[c] = tile * m;
@@ -464,6 +552,7 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
         terrainPlanes[c][5] = glm::vec4(-L, r + casterReach + glm::dot(center, L));
     }
     if (!shadowsOn) fd.cascadeFar = glm::vec4(-1.0f);  // every visible point is past the last cascade: fully lit
+    else if (cascades < kCascades) fd.cascadeFar.w = fd.cascadeFar.z;  // past the last drawn cascade: lit
 
     auto* mapped = static_cast<FrameData*>(frameBuffers_[fc.frameIndex].mapped);
     mapped[0] = fd;
@@ -486,7 +575,7 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
     veg.cull(cmd, frame, 0);
     const uint32_t shadowMinLod[kCascades] = {1, 2, 2, 2};
     if (shadowsOn)
-        for (uint32_t c = 0; c < kCascades; ++c) veg.cull(cmd, shadowFrame(c), 1 + c, shadowMinLod[c]);
+        for (uint32_t c = 0; c < cascades; ++c) veg.cull(cmd, shadowFrame(c), 1 + c, shadowMinLod[c]);
 
     // ---- shadow atlas
     VkPipelineLayout layout = bindless_->pipelineLayout();
@@ -534,13 +623,13 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
         sa.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         sa.clearValue.depthStencil = {0.0f, 0};
         VkRenderingInfo sri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-        sri.renderArea = {{0, 0}, {kShadowTile * 2, kShadowTile * 2}};
+        sri.renderArea = {{0, 0}, {shadowTile_ * 2, shadowTile_ * 2}};
         sri.layerCount = 1;
         sri.pDepthAttachment = &sa;
         vkCmdBeginRendering(cmd, &sri);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, nullptr);
-        for (uint32_t c = 0; shadowsOn && c < kCascades; ++c) {
-            int32_t x = int32_t((c & 1) * kShadowTile), y = int32_t((c >> 1) * kShadowTile);
+        for (uint32_t c = 0; shadowsOn && c < cascades; ++c) {
+            int32_t x = int32_t((c & 1) * shadowTile_), y = int32_t((c >> 1) * shadowTile_);
             VkViewport svp{float(x), float(y), float(shadowRes[c]), float(shadowRes[c]), 0, 1};
             VkRect2D ssc{{x, y}, {shadowRes[c], shadowRes[c]}};
             vkCmdSetViewport(cmd, 0, 1, &svp);
@@ -556,6 +645,8 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
                       VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                       VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                       VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    stamp(cmd, fc.frameIndex, 1);
 
     // ---- main HDR pass
     gfx::imageBarrier(cmd, hdr_.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -594,11 +685,14 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, params.wireframe ? terrainWire_ : terrainPipe_);
     terrain.draw(cmd, layout, frame, cam, fd.frustum);
     veg.draw(cmd, frame);
-    if (params.grass) grass.draw(cmd, frame, cam);
+    if (params.grass) grass.draw(cmd, frame, cam, params.grassDensity);
     if (player.view == game::Player::View::ThirdPerson) {
         if (character.loaded()) character.draw(cmd, frame, charModel, false);
         else drawCharacter(cmd, frame, player);  // placeholder mannequin when no character is baked
     }
+    // Lakes last among the opaque scene: they blend over the lake bed and the terrain hides them above the shore.
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, waterPipe_);
+    terrain.drawWater(cmd, layout, frame, cam, fd.frustum);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyPipe_);
     FullscreenPush fp{frame, hdrIndex_, params.exposure, params.menuFade, exposureBuf_.address};
@@ -613,6 +707,8 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
                       VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
                       VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                       VK_IMAGE_ASPECT_DEPTH_BIT);
+
+    stamp(cmd, fc.frameIndex, 2);
 
     // ---- screen space ambient occlusion (applied and denoised by the TAA resolve)
     if (params.ssao) {
@@ -639,6 +735,8 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
                           VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                           VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
     }
+
+    stamp(cmd, fc.frameIndex, 3);
 
     // ---- TAA resolve into this frame's history image
     {
@@ -678,9 +776,10 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
         historyCur_ = prev;
     }
 
+    stamp(cmd, fc.frameIndex, 4);
+
     // ---- eye adaptation: measure the resolved image, smoothly move the exposure the tonemap uses
     {
-        float dt = std::clamp(time - lastTime_, 0.0f, 0.25f);
         lastTime_ = time;
         gfx::memoryBarrier(cmd, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
                            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -709,12 +808,19 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
     ri2.colorAttachmentCount = 1;
     ri2.pColorAttachments = &sw;
     vkCmdBeginRendering(cmd, &ri2);
+    // The 3D passes ran at the (possibly scaled) render resolution; the tonemap upscales to the whole window.
+    VkViewport fullVp{0, 0, float(dev_->swapExtent().width), float(dev_->swapExtent().height), 0, 1};
+    VkRect2D fullSc{{0, 0}, dev_->swapExtent()};
+    vkCmdSetViewport(cmd, 0, 1, &fullVp);
+    vkCmdSetScissor(cmd, 0, 1, &fullSc);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tonemapPipe_);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, nullptr);
     vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(fp), &fp);
     vkCmdDraw(cmd, 3, 1, 0, 0);
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
     vkCmdEndRendering(cmd);
+    stamp(cmd, fc.frameIndex, 5);
+    stampsWritten_[fc.frameIndex] = queryPool_ != VK_NULL_HANDLE;
     if (captureRequested_) {
         captureRequested_ = false;
         captureExtent_ = dev_->swapExtent();

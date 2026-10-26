@@ -1,5 +1,7 @@
 #include "world/Terrain.h"
 
+#include <map>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -25,6 +27,8 @@ struct TerrainPush {
     float level;
     glm::vec3 originMod;
     float coverRes;
+    glm::vec3 up;
+    float waterAbove;
 };
 static_assert(sizeof(TerrainPush) <= 128);
 
@@ -134,6 +138,7 @@ void Terrain::build(Chunk& c) {
                                 std::pow(size * 0.5 * geo::metersPerDegLon(std::min(std::abs(lat0), std::abs(lat0 + size))), 2));
     c.radius = std::sqrt(halfDiag * halfDiag + std::pow((hMax - hMin) * 0.5, 2)) + 10.0;
     geo::Enu enu = geo::enuFrame(clat, clon);
+    c.up = glm::vec3(enu.up);
     double skirt = std::max(4.0, size * geo::metersPerDegLat(clat) / kGrid * 0.6);
 
     std::vector<render::TerrainVertex> verts(kGridVerts + kSkirtVerts);
@@ -165,9 +170,23 @@ void Terrain::build(Chunk& c) {
     // Land cover, row 0 = south.
     std::vector<uint8_t> cover(kCoverRes * kCoverRes);
     double cd = size / kCoverRes;
+    std::map<float, int> lakes;  // level -> water texels of that lake in this chunk
     for (int y = 0; y < kCoverRes; ++y)
-        for (int x = 0; x < kCoverRes; ++x)
-            cover[size_t(y) * kCoverRes + x] = data_->landCover(lat0 + (y + 0.5) * cd, lon0 + (x + 0.5) * cd, cd);
+        for (int x = 0; x < kCoverRes; ++x) {
+            double lat = lat0 + (y + 0.5) * cd, lon = lon0 + (x + 0.5) * cd;
+            uint8_t cls = data_->landCover(lat, lon, cd);
+            cover[size_t(y) * kCoverRes + x] = cls;
+            // Lake surfaces only for the fine chunks near the player (up to ~1.7 km): coarser ones span whole lakes in a
+            // few texels, and far away the painted water of terrain.frag looks the same.
+            if (cls != data::lc::Water || c.level < kMaxLevel - 3) continue;
+            double level = data_->lakeLevel(lat, lon);
+            if (!std::isnan(level)) ++lakes[float(level)];
+        }
+    // The chunk's lake surface: the level of the lake it covers most. Every chunk of a lake gets the same level.
+    if (!lakes.empty()) {
+        auto main = std::max_element(lakes.begin(), lakes.end(), [](auto& a, auto& b) { return a.second < b.second; });
+        c.waterAbove = float(double(main->first) - (hMin + hMax) * 0.5);
+    }
 
     c.vertexBytes = uint32_t(verts.size() * sizeof(render::TerrainVertex));
     c.payload.resize(c.vertexBytes + cover.size());
@@ -187,7 +206,7 @@ bool Terrain::visit(int level, int64_t y, int64_t x, const glm::dvec3& cam) {
     double dist = ready ? std::max(0.0, glm::length(cam - c->origin) - c->radius) : approxDist;
     float prio = float(dist / sizeM) - float(level) * 0.01f;
 
-    bool wantSplit = level < kMaxLevel && dist < sizeM * kSplitFactor;
+    bool wantSplit = level < kMaxLevel && dist < sizeM * kSplitFactor * double(detail);
     if (wantSplit) {
         bool allReady = true;
         for (int k = 0; k < 4; ++k) {
@@ -248,10 +267,11 @@ void Terrain::update(const glm::dvec3& camEcef, double camLat, double camLon) {
     }
 }
 
-void Terrain::draw(VkCommandBuffer cmd, VkPipelineLayout layout, VkDeviceAddress frameData, const glm::dvec3& camEcef,
-                   const glm::vec4 frustum[6]) {
+void Terrain::drawChunks(VkCommandBuffer cmd, VkPipelineLayout layout, VkDeviceAddress frameData,
+                         const glm::dvec3& camEcef, const glm::vec4 frustum[6], bool lakesOnly) {
     vkCmdBindIndexBuffer(cmd, indexBuffer_.buffer, 0, VK_INDEX_TYPE_UINT32);
     for (auto& c : drawList_) {
+        if (lakesOnly && c->waterAbove < -1e8f) continue;
         glm::vec3 rel = glm::vec3(c->origin - camEcef);
         bool visible = true;
         for (int i = 0; i < 6 && visible; ++i)
@@ -265,9 +285,21 @@ void Terrain::draw(VkCommandBuffer cmd, VkPipelineLayout layout, VkDeviceAddress
         pc.level = float(c->level);
         pc.originMod = glm::vec3(glm::mod(c->origin, glm::dvec3(4096.0)));
         pc.coverRes = float(kCoverRes);
+        pc.up = c->up;
+        pc.waterAbove = c->waterAbove;
         vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(pc), &pc);
         vkCmdDrawIndexed(cmd, indexCount_, 1, 0, 0, 0);
     }
+}
+
+void Terrain::draw(VkCommandBuffer cmd, VkPipelineLayout layout, VkDeviceAddress frameData, const glm::dvec3& camEcef,
+                   const glm::vec4 frustum[6]) {
+    drawChunks(cmd, layout, frameData, camEcef, frustum, false);
+}
+
+void Terrain::drawWater(VkCommandBuffer cmd, VkPipelineLayout layout, VkDeviceAddress frameData,
+                        const glm::dvec3& camEcef, const glm::vec4 frustum[6]) {
+    drawChunks(cmd, layout, frameData, camEcef, frustum, true);
 }
 
 }  // namespace world

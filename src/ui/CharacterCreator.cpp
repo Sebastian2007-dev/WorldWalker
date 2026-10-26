@@ -4,7 +4,10 @@
 #include "ui/Theme.h"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <map>
+#include <random>
+#include <set>
 
 namespace ui {
 namespace {
@@ -13,20 +16,220 @@ std::string label(std::string s) {
     if(!s.empty()) s[0]=char(std::toupper(static_cast<unsigned char>(s[0])));
     return s;
 }
+std::string lower(std::string s) {
+    for(auto& c:s) c=char(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
 const char* groupLabel(const std::string& group) {
     static const std::map<std::string,const char*> names={
         {"arms","Arme"},{"legs","Beine"},{"torso","Oberkörper"},{"head","Kopfform"},
         {"chin","Kinn & Kiefer"},{"eyes","Augen"},{"nose","Nase"},{"mouth","Mund"},
         {"ears","Ohren"},{"neck","Hals"},{"cheek","Wangen"},{"forehead","Stirn"},
-        {"eyebrows","Augenbrauen"},{"breast","Brust"},{"hips","Hüfte"},{"buttocks","Gesäß"},
+        {"eyebrows","Augenbrauen"},{"breast","Brust"},{"hip","Hüfte"},{"hips","Hüfte"},{"buttocks","Gesäß"},
         {"hands","Hände"},{"feet","Füße"},{"stomach","Bauch"},{"pelvis","Becken"}};
     auto it=names.find(group); return it==names.end()?nullptr:it->second;
+}
+
+// MakeHuman modifier names ("nose-trans-down-up") as German labels with the words for both slider ends.
+struct DetailText { std::string label; std::string lo, hi; };
+DetailText detailText(const std::string& name) {
+    static const std::map<std::string,std::pair<const char*,const char*>> ranges={
+        {"decr-incr",{"weniger","mehr"}},{"down-up",{"runter","hoch"}},{"in-out",{"innen","außen"}},
+        {"backward-forward",{"zurück","vor"}},{"concave-convex",{"konkav","konvex"}},
+        {"compress-uncompress",{"gestaucht","gestreckt"}},{"square-round",{"eckig","rund"}},
+        {"pointed-triangle",{"spitz","dreieckig"}}};
+    static const std::map<std::string,const char*> words={
+        {"lowerarm","Unterarm"},{"upperarm","Oberarm"},{"upperleg","Oberschenkel"},{"upperlegs","Oberschenkel"},
+        {"lowerleg","Unterschenkel"},{"lowerlegs","Unterschenkel"},{"leg","Beine"},{"calf","Wade"},{"knee","Knie"},
+        {"thigh","Oberschenkel"},{"ankle","Knöchel"},{"wrist","Handgelenk"},{"shoulder","Schulter"},
+        {"scale","Größe"},{"depth","Tiefe"},{"horiz","Breite"},{"vert","Höhe"},{"fat","Fett"},{"muscle","Muskeln"},
+        {"length","Länge"},{"circ","Umfang"},{"height","Höhe"},{"height1","Höhe 1"},{"height2","Höhe 2"},
+        {"height3","Höhe 3"},{"angle","Winkel"},{"rot","Drehung"},{"point","Spitze"},{"dist","Abstand"},
+        {"volume","Volumen"},{"lobe","Ohrläppchen"},{"shape","Form"},{"flap","Ohrmuschel"},{"wing","Abstehen"},
+        {"corner1","Augenwinkel 1"},{"corner2","Augenwinkel 2"},{"push1","Lid 1"},{"push2","Lid 2"},
+        {"eyefold","Lidfalte"},{"bag","Tränensack"},{"epicanthus","Innere Lidfalte"},{"jaw","Kiefer"},
+        {"drop","Absenkung"},{"prominent","Vorstehen"},{"bones","Knochen"},{"width","Breite"},
+        {"width1","Breite oben"},{"width2","Breite Mitte"},{"width3","Breite unten"},{"cleft","Grübchen"},
+        {"triangle","Dreiecksform"},{"prognathism","Vorbiss"},{"temple","Schläfen"},{"nubian","Wölbung"},
+        {"fingers","Finger"},{"diameter","Dicke"},{"distance","Abstand"},{"back","Rückseite"},
+        {"invertedtriangular","Umgekehrtes Dreieck"},{"diamond","Raute"},{"oval","Oval"},
+        {"rectangular","Rechteckig"},{"round","Rund"},{"age","Alterung"},{"triangular","Dreieckig"},
+        {"square","Eckig"},{"waist","Taille"},{"valgus","X-Bein-Stellung"},{"lowerlip","Unterlippe"},
+        {"upperlip","Oberlippe"},{"cupidsbow","Amorbogen"},{"angles","Mundwinkel"},{"ext","Kontur"},
+        {"middle","Mitte"},{"dimples","Grübchen"},{"philtrum","Philtrum"},{"double","Doppelkinn"},
+        {"nostrils","Nasenlöcher"},{"flaring","Nasenflügel"},{"curve","Krümmung"},{"hump","Höcker"},
+        {"greek","Griechische Form"},{"septumangle","Septumwinkel"},{"base","Basis"},{"compression","Stauchung"},
+        {"tone","Straffheit"},{"pregnant","Schwangerschaft"},{"navel","Bauchnabel"},{"pectoral","Brustmuskel"},
+        {"dorsi","Rückenmuskel"},{"underbust","Unterbrust"},{"napetowaist","Nacken bis Taille"},
+        {"waisttohip","Taille bis Hüfte"},{"hips","Hüfte"},{"vshape","V-Form"},{"frontchest","Brustbreite"},
+        {"bust","Brust"},{"inner","Innen"},{"bones","Knochen"},{"neck","Hals"}};
+    static const std::set<std::string> stems={"nose","ear","eye","eyes","mouth","head","neck","hip","foot","hand","cheek",
+        "chin","forehead","torso","stomach","pelvis","buttocks","breast","eyebrows"};
+    static const std::set<std::string> sizes={"scale","depth","horiz","vert","length","circ","height","width","dist",
+        "volume","distance","diameter","width1","width2","width3"};
+    std::vector<std::string> tokens;
+    for(size_t start=0;start<=name.size();) {
+        size_t end=name.find('-',start); if(end==std::string::npos) end=name.size();
+        tokens.push_back(name.substr(start,end-start)); start=end+1;
+    }
+    DetailText out;
+    std::string range;
+    if(tokens.size()>=3) {
+        range=tokens[tokens.size()-2]+"-"+tokens.back();
+        if(auto r=ranges.find(range); r!=ranges.end()) { out.lo=r->second.first; out.hi=r->second.second; tokens.resize(tokens.size()-2); }
+        else range.clear();
+    }
+    if(tokens.size()>1 && stems.count(tokens[0])) tokens.erase(tokens.begin());
+    std::erase(tokens,std::string("measure"));
+    bool size=false;
+    for(auto& t:tokens) size|=sizes.count(t)>0;
+    if(range=="decr-incr" && size) { out.lo="kleiner"; out.hi="größer"; }
+    for(size_t i=0;i<tokens.size();++i) {
+        std::string word;
+        if(tokens[i]=="trans") word=range=="down-up"?"Position vertikal":range=="in-out"?"Position seitlich":"Position vor/zurück";
+        else if(tokens[i]=="laugh" && i+1<tokens.size() && tokens[i+1]=="lines") { word="Lachfalten"; ++i; }
+        else if(tokens[i]=="scale" && i+1<tokens.size() && sizes.count(tokens[i+1])) continue;
+        else if(auto w=words.find(tokens[i]); w!=words.end()) word=w->second;
+        else word=label(tokens[i]);
+        out.label+=(out.label.empty()?"":" ")+word;
+    }
+    if(out.label.empty()) out.label=label(name);
+    return out;
+}
+
+std::string skinLabel(const std::string& name) {
+    static const std::map<std::string,const char*> words={
+        {"young","Jung"},{"middleage","Mittleres Alter"},{"old","Alt"},{"african","afrikanisch"},{"asian","asiatisch"},
+        {"caucasian","europäisch"},{"female","weiblich"},{"male","männlich"},{"female2","weiblich (Variante 2)"},
+        {"male2","männlich (Variante 2)"},{"special","mit Anzug"}};
+    std::string out; size_t start=0;
+    while(start<=name.size()) {
+        size_t end=name.find('_',start); if(end==std::string::npos) end=name.size();
+        std::string token=name.substr(start,end-start); start=end+1;
+        auto w=words.find(token);
+        if(token=="suit") continue;
+        out+=(out.empty()?"":", ")+(w!=words.end()?std::string(w->second):token);
+    }
+    return out;
+}
+std::string assetLabel(const std::string& name) {
+    static const std::map<std::string,const char*> names={
+        {"hair_afro01","Afro"},{"hair_bob01","Bob, lang"},{"hair_bob02","Bob, kurz"},{"hair_braid01","Geflochtener Zopf"},
+        {"hair_long01","Lang & offen"},{"hair_ponytail01","Pferdeschwanz"},{"hair_short01","Kurz, gescheitelt"},
+        {"hair_short02","Kurz, frech"},{"hair_short03","Kurz, zurückgekämmt"},{"hair_short04","Kurzhaarschnitt"},
+        {"hair_bob_blunt","Bob, gerade"},{"hair_bob_blunt_bangs","Bob, gerade mit Pony"},
+        {"hair_bob_curled_under","Bob, eingedreht"},{"hair_bob_curled_under_bangs","Bob, eingedreht mit Pony"},
+        {"hair_bob_inverted","Bob, gestuft"},{"hair_bob_inverted_bangs","Bob, gestuft mit Pony"},
+        {"hair_littleright_hair_bobcut","Bob, kinnlang"},{"hair_fhair01","Lang, glatt"},
+        {"hair_o4saken_long01","Lang, wellig"},{"hair_hair_06","Kurz, fransig"},{"hair_hair_bun_brown","Dutt"},
+        {"hair_double_mhbraid","Zwei Zöpfe"},{"hair_frenchbraid1mh01","Französischer Zopf"},
+        {"hair_rev_fr_braidbun1","Zopf mit Dutt"},{"hair_unkempt_mhbraidfr","Zopf, locker"},
+        {"hair_blondwithheadband","Mit Haarband"},{"hair_mhair02","Kurz, seitlich"},{"hair_hair_05","Kurz, voll"},
+        {"hair_hair1","Mittellang, gescheitelt"},{"hair_short_messy","Kurz, zerzaust"},{"hair_junglebookhair","Lang, zottelig"},
+        {"hair_shaggy_green","Stufig, schulterlang"},{"hair_straight_bangs","Glatt mit Pony"},
+        {"hair_strawberry_cloud","Lockenwolke"},{"hair_animehair","Anime"},
+        {"hair_cornrowsofelv5","Cornrows"},{"hair_curly","Locken, lang"},{"hair_curly2","Locken, sehr lang"},
+        {"hair_elv_50supdo1","50er-Hochsteckfrisur"},{"hair_elvs_adrienne_hair1","Lang, Seitenscheitel"},
+        {"hair_elvs_ashley_mayhair1","Schulterlang, wellig"},{"hair_elvs_braid_bun_q1","Flechtdutt"},
+        {"hair_elvs_daisyhair1","Lang, Mittelscheitel"},{"hair_elvs_grumphair","Zurückgekämmt"},
+        {"hair_elvs_hazel_hair","Lang, gesträhnt"},{"hair_elvs_inverted_curlybob1","Bob, fransig"},
+        {"hair_elvs_island_princess1","Lang mit Schleife"},{"hair_elvs_katherinehair1","Asymmetrisch mit Pony"},
+        {"hair_elvs_keylth_hair_m1","Zurückgebunden"},{"hair_elvs_ladies_hippyhair1","Hippie, seitlich"},
+        {"hair_elvs_laracroft_hair1a","Hochgesteckt mit Strähnen"},{"hair_elvs_mickey_afro","Afro-Puffs"},
+        {"hair_elvs_short_daisyh1","Bob, Mittelscheitel"},{"hair_elvs_that80sbabe_m1","80er-Wellen"},
+        {"hair_elvs_thejournalist1","Kurz, Seitenscheitel"},{"hair_elvscurly_bob1","Locken-Bob"},
+        {"hair_hair_01","Meister mit Bart"},{"hair_hair_02","Anime, wellig"},{"hair_hair_03","Kurz, stufig"},
+        {"hair_hair_04","Kurz, gewellt"},{"hair_hair_07","Lang, voluminös"},{"hair_hair_08","Pagenkopf"},
+        {"hair_long2_alpha7","Lang, über dem Auge"},{"hair_long_alpha7","Lang, schlicht"},
+        {"hair_maxwell_hair_mh","Stachelig"},{"hair_o4saken_chinesebob01","Bob, lang und stufig"},
+        {"hair_o4saken_curly01","Locken, seitlich"},{"hair_wig_bow_tie","Mit Zopfband"},
+        {"hair_wig_bun_blonde","Kurz, hochgesteckt"},{"hair_witchybob_elv2","Bob mit Pony"},
+        {"eyes_highpolyeyes","Detailliert"},{"eyes_low_poly","Einfach"},
+        {"clothes_fedora","Fedora"},{"clothes_fedora_cocked","Fedora, schräg"},
+        {"clothes_female_casualsuit01","Freizeit 1"},{"clothes_female_casualsuit02","Freizeit 2"},
+        {"clothes_female_elegantsuit01","Elegant"},{"clothes_female_sportsuit01","Sport"},
+        {"clothes_male_casualsuit01","Freizeit 1"},{"clothes_male_casualsuit02","Freizeit 2"},
+        {"clothes_male_casualsuit03","Freizeit 3"},{"clothes_male_casualsuit04","Freizeit 4"},
+        {"clothes_male_casualsuit05","Freizeit 5"},{"clothes_male_casualsuit06","Freizeit 6"},
+        {"clothes_male_elegantsuit01","Anzug"},{"clothes_male_worksuit01","Arbeitskleidung"}};
+    if(auto it=names.find(name); it!=names.end()) {
+        // Both templates offer every outfit; the cut is part of the name.
+        if(name.rfind("clothes_female_",0)==0) return it->second+std::string(" (Damen)");
+        if(name.rfind("clothes_male_",0)==0) return it->second+std::string(" (Herren)");
+        return it->second;
+    }
+    auto digits=name.find_last_not_of("0123456789");
+    std::string number=digits+1<name.size()?std::to_string(std::stoi(name.substr(digits+1))):"";
+    if(name.rfind("eyebrows_",0)==0) return "Augenbrauen "+number;
+    if(name.rfind("eyelashes_",0)==0) return "Wimpern "+number;
+    if(name.rfind("clothes_shoes",0)==0) return "Schuhe "+number;
+    return label(name.substr(name.find('_')+1));
+}
+bool isShoes(const std::string& name) { return name.rfind("clothes_shoes",0)==0; }
+bool isHat(const std::string& name) { return name.rfind("clothes_fedora",0)==0; }
+bool isOutfit(const std::string& name) { return name.rfind("clothes_",0)==0 && !isShoes(name) && !isHat(name); }
+
+// Previous/next arrows around a combo listing every entry. Returns true when `selected` changed.
+bool picker(const char* text, const char* id, const std::vector<std::string>& entries, int& selected) {
+    if(entries.empty()) return false;
+    int n=int(entries.size()), before=selected=std::clamp(selected,0,n-1);
+    float field=theme::row(text), arrow=ImGui::GetFrameHeight(), gap=theme::scale(4);
+    ImGui::PushID(id);
+    if(ImGui::ArrowButton("##prev",ImGuiDir_Left)) selected=(selected+n-1)%n;
+    ImGui::SameLine(0,gap);
+    ImGui::SetNextItemWidth(std::max(arrow,field-2*arrow-2*gap-theme::scale(12)));
+    if(ImGui::BeginCombo("##list",entries[size_t(selected)].c_str(),ImGuiComboFlags_NoArrowButton)) {
+        for(int i=0;i<n;++i) if(ImGui::Selectable(entries[size_t(i)].c_str(),i==selected)) selected=i;
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine(0,gap);
+    if(ImGui::ArrowButton("##next",ImGuiDir_Right)) selected=(selected+1)%n;
+    ImGui::PopID();
+    return selected!=before;
+}
+// One asset slot (hair style, shoes, ...): every catalog asset accepted by `matches`, optionally "Keine".
+template<class Match> bool assetSlot(render::Human& human, const char* text, const char* id, Match matches, bool none) {
+    std::vector<std::string> names, entries;
+    if(none) { names.push_back(""); entries.push_back("Keine"); }
+    for(auto& a:human.catalog()["assets"]) {
+        std::string name=a["name"];
+        if(matches(name)) { names.push_back(name); entries.push_back(assetLabel(name)); }
+    }
+    if(names.empty() || (none && names.size()==1)) return false;
+    // Alphabetical, so related styles ("Bob, ...") sit together; "Keine" stays first.
+    std::vector<size_t> order(names.size());
+    for(size_t i=0;i<order.size();++i) order[i]=i;
+    std::stable_sort(order.begin()+(none?1:0),order.end(),[&](size_t a,size_t b) { return entries[a]<entries[b]; });
+    std::vector<std::string> sortedNames, sortedEntries;
+    for(auto i:order) { sortedNames.push_back(names[i]); sortedEntries.push_back(entries[i]); }
+    names.swap(sortedNames); entries.swap(sortedEntries);
+    auto& selection=human.state["assets"];
+    int current=0;
+    for(auto& s:selection) for(size_t i=0;i<names.size();++i) if(!names[i].empty() && s==names[i]) current=int(i);
+    if(!picker(text,id,entries,current)) return false;
+    for(auto it=selection.begin();it!=selection.end();) if(matches(it->get<std::string>())) it=selection.erase(it); else ++it;
+    if(!names[size_t(current)].empty()) selection.push_back(names[size_t(current)]);
+    return true;
+}
+bool sameColor(const nlohmann::json& c, const float rgb[3]) {
+    if(!c.is_array() || c.size()!=3) return false;
+    for(int k=0;k<3;++k) if(!c[k].is_number() || std::abs(c[k].get<float>()-rgb[k])>0.004f) return false;
+    return true;
+}
+struct EyeColor { const char* id; const char* name; float rgb[3]; };
+const EyeColor kEyeColors[]={
+    {"blue","Blau",{0.27f,0.45f,0.72f}},{"bluegreen","Blaugrün",{0.24f,0.52f,0.52f}},{"brown","Braun",{0.33f,0.19f,0.09f}},
+    {"brownlight","Hellbraun",{0.56f,0.38f,0.19f}},{"deepblue","Tiefblau",{0.13f,0.24f,0.58f}},{"green","Grün",{0.3f,0.52f,0.28f}},
+    {"grey","Grau",{0.53f,0.57f,0.6f}},{"ice","Eisblau",{0.7f,0.82f,0.9f}},{"lightblue","Hellblau",{0.5f,0.7f,0.9f}}};
+const EyeColor* eyeColor(const std::string& id) {
+    for(auto& e:kEyeColors) if(id==e.id) return &e;
+    return nullptr;
 }
 }
 void CharacterCreator::open(render::Human& human) {
     original_=human.state;
     if(!human.state.value("enabled",false)) human.applyTemplate(render::Human::Template::Male);
-    open_=true; dirty_=true; error_.clear(); tab_=0; filter_[0]=0;
+    open_=true; dirty_=true; showClothes_=false; error_.clear(); tab_=0; filter_[0]=0;
     human.state["enabled"]=true; orbit=180; distance=2.6f;
 }
 CharacterCreator::Action CharacterCreator::cancel(render::Human& human) {
@@ -53,7 +256,7 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
         ImGuiChildFlags_None,ImGuiWindowFlags_NoBackground);
     theme::section("VORLAGE");
     const bool female=state.value("gender",1.0f)<0.5f;
-    float cardWidth=(width-S(12))*0.5f;
+    float cardWidth=(width-S(24))/3.0f;
     if(theme::choice("##male","Männlich","Markant & athletisch",!female,cardWidth)) {
         human.applyTemplate(render::Human::Template::Male); dirty_=true;
     }
@@ -61,11 +264,19 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
     if(theme::choice("##female","Weiblich","Weich & ausgewogen",female,cardWidth)) {
         human.applyTemplate(render::Human::Template::Female); dirty_=true;
     }
+    ImGui::SameLine(0,S(12));
+    if(theme::choice("##random","Zufällig","Überrasch mich",false,cardWidth)) {
+        human.randomize(std::random_device{}()); dirty_=true;
+    }
     ImGui::Dummy(ImVec2(0,S(6)));
-    const char* tabs[]={"Körper","Details","Aussehen"};
-    for(int t=0;t<3;++t) {
+    const char* tabs[]={"Körper","Details","Aussehen","Kleidung"};
+    for(int t=0;t<4;++t) {
         if(t) ImGui::SameLine(0,S(4));
-        if(theme::tab(tabs[t],tab_==t)) tab_=t;
+        if(theme::tab(tabs[t],tab_==t)) {
+            // Opening the clothing tab shows the outfit; it can be hidden again there.
+            if(t==3 && tab_!=3 && !showClothes_) { showClothes_=true; dirty_=true; }
+            tab_=t;
+        }
     }
     auto slider=[&](const char* text,const char* key,float fallback,float lo=0.0f,float hi=1.0f) {
         float v=state.value(key,fallback);
@@ -77,71 +288,131 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
         slider("Alter","age",0.5f,0.5f,1.0f);
         slider("Muskelmasse","muscle",0.5f); slider("Gewicht","weight",0.5f);
         slider("Größe","height",0.5f); slider("Proportionen","proportions",0.5f);
-        if(state.value("gender",1.0f)<0.5f && ImGui::CollapsingHeader("Brustform")) {
+        if(state.value("gender",1.0f)<0.5f) {
+            theme::section("BRUST");
             slider("Volumen","cupsize",0.44f); slider("Form","firmness",0.6f);
         }
-        if(ImGui::CollapsingHeader("Gesichtsmerkmale mischen")) {
-            slider("Afrikanisch","african",0); slider("Asiatisch","asian",0); slider("Europäisch","caucasian",1);
-        }
+        theme::section("HERKUNFT");
+        slider("Afrikanisch","african",0); slider("Asiatisch","asian",0); slider("Europäisch","caucasian",1);
+        theme::muted("Mischt die typischen Gesichts- und Körpermerkmale.");
     } else if(tab_==1) {
-        theme::section("GESICHT & KÖRPERDETAILS");
+        ImGui::Dummy(ImVec2(0,S(6)));
         ImGui::SetNextItemWidth(width);
         ImGui::InputTextWithHint("##filter","Details suchen ...",filter_,sizeof(filter_));
-        std::string previous; bool expanded=false;
-        for(auto& s:catalog["sliders"]) {
-            std::string group=s["group"], name=s["name"], key=group+"/"+name;
-            if(group!=previous) {
-                const char* translated=groupLabel(group);
-                expanded=ImGui::CollapsingHeader(translated?translated:label(group).c_str()); previous=group;
+        theme::muted("Rechtsklick auf einen Regler setzt ihn zurück.");
+        auto& details=state["details"];
+        std::string query=lower(filter_);
+        auto group=[&](const std::string& g) {
+            std::vector<std::pair<const nlohmann::json*,DetailText>> rows;
+            for(auto& s:catalog["sliders"]) if(s["group"]==g) {
+                auto text=detailText(s["name"]);
+                if(!query.empty() && lower(text.label).find(query)==std::string::npos &&
+                   lower(s["name"].get<std::string>()).find(query)==std::string::npos) continue;
+                rows.push_back({&s,text});
             }
-            if(!expanded && !filter_[0]) continue;
-            if(filter_[0] && key.find(filter_)==std::string::npos) continue;
-            float v=state["details"].value(key,0.0f);
-            ImGui::PushTextWrapPos(width); ImGui::TextUnformatted(label(name).c_str()); ImGui::PopTextWrapPos();
-            ImGui::SetNextItemWidth(width-S(12));
-            if(ImGui::SliderFloat(("##"+key).c_str(),&v,s["neg"].get<int>()<0?0.0f:-1.0f,1.0f,"%.2f",ImGuiSliderFlags_AlwaysClamp)) {
-                state["details"][key]=v; dirty_=true;
-            }
-        }
-    } else {
-        theme::section("HAUT & AUGEN");
-        auto materials=[&](const char* title,const char* key,const char* source) {
-            auto& list=catalog[source]; if(list.empty()) return;
-            int selected=std::clamp(state.value(key,0),0,int(list.size())-1);
-            ImGui::TextUnformatted(title); ImGui::SetNextItemWidth(width-S(12));
-            if(ImGui::BeginCombo((std::string("##")+key).c_str(),label(list[selected]["name"]).c_str())) {
-                for(size_t i=0;i<list.size();++i) if(ImGui::Selectable(label(list[i]["name"]).c_str(),selected==int(i))) { state[key]=i; dirty_=true; }
-                ImGui::EndCombo();
+            if(rows.empty()) return;
+            const char* translated=groupLabel(g);
+            std::string title=translated?translated:label(g);
+            if(query.empty() ? !ImGui::CollapsingHeader(title.c_str()) : (ImGui::TextDisabled("%s",title.c_str()),false)) return;
+            for(auto& [s,text]:rows) {
+                std::string key=g+"/"+(*s)["name"].get<std::string>();
+                bool oneSided=(*s)["neg"].get<int>()<0;
+                float v=details.contains(key)&&details[key].is_number()?details[key].get<float>():0.0f;
+                ImGui::PushTextWrapPos(width); ImGui::TextUnformatted(text.label.c_str()); ImGui::PopTextWrapPos();
+                ImGui::SetNextItemWidth(width-S(12));
+                std::string format=oneSided||text.lo.empty()?"%.2f":v<-0.005f?text.lo+"  %.2f":v>0.005f?text.hi+"  +%.2f":"neutral";
+                if(ImGui::SliderFloat(("##"+key).c_str(),&v,oneSided?0.0f:-1.0f,1.0f,format.c_str(),ImGuiSliderFlags_AlwaysClamp)) {
+                    details[key]=v; dirty_=true;
+                }
+                if(ImGui::IsItemClicked(ImGuiMouseButton_Right) && details.contains(key)) { details.erase(key); dirty_=true; }
             }
         };
-        materials("Haut","skin","skins"); materials("Augenfarbe","eyes","eyeMaterials");
-        theme::section("HAARE & GESICHT");
-        for(auto kind:{"eyes","eyebrows","eyelashes","hair"}) {
-            const char* title=std::string(kind)=="eyes"?"Augen":std::string(kind)=="eyebrows"?"Augenbrauen":std::string(kind)=="eyelashes"?"Wimpern":"Haare";
-            ImGui::TextUnformatted(title); ImGui::SetNextItemWidth(width-S(12));
-            std::string current="Keine", selectedName;
-            for(auto& a:catalog["assets"]) if(a["kind"]==kind)
-                for(auto& selected:state["assets"]) if(selected==a["name"]) {
-                    selectedName=selected.get<std::string>(); current=label(selectedName.substr(std::string(kind).size()+1));
-                }
-            auto select=[&](const std::string& name) {
-                auto& selection=state["assets"];
-                for(auto it=selection.begin();it!=selection.end();) {
-                    bool remove=false;
-                    for(auto& a:catalog["assets"]) if(a["kind"]==kind && a["name"]==*it) remove=true;
-                    if(remove) it=selection.erase(it); else ++it;
-                }
-                if(!name.empty()) selection.push_back(name); dirty_=true;
-            };
-            if(ImGui::BeginCombo((std::string("##asset-")+kind).c_str(),current.c_str())) {
-                if(ImGui::Selectable("Keine",selectedName.empty())) select("");
-                for(auto& a:catalog["assets"]) if(a["kind"]==kind) {
-                    std::string name=a["name"];
-                    if(ImGui::Selectable(label(name.substr(std::string(kind).size()+1)).c_str(),name==selectedName)) select(name);
-                }
-                ImGui::EndCombo();
+        static const std::vector<std::string> face={"head","forehead","eyebrows","eyes","nose","cheek","mouth","chin","ears","neck"};
+        static const std::vector<std::string> body={"torso","breast","stomach","hip","pelvis","buttocks","arms","hands","legs","feet"};
+        theme::section("GESICHT");
+        for(auto& g:face) group(g);
+        theme::section("KÖRPER");
+        for(auto& g:body) group(g);
+        std::set<std::string> known(face.begin(),face.end()); known.insert(body.begin(),body.end());
+        for(auto& s:catalog["sliders"]) {
+            std::string g=s["group"];
+            if(known.insert(g).second) group(g);
+        }
+        ImGui::Dummy(ImVec2(0,S(6)));
+        if(!details.empty() && theme::action("Alle Details zurücksetzen",width)) { details=nlohmann::json::object(); dirty_=true; }
+    } else if(tab_==2) {
+        theme::section("HAUT");
+        {
+            std::vector<std::string> skins;
+            for(auto& s:catalog["skins"]) skins.push_back(skinLabel(s["name"]));
+            int skin=state.value("skin",0);
+            if(picker("Hauttyp","skin",skins,skin)) { state["skin"]=skin; dirty_=true; }
+        }
+        slider("Helligkeit","skinTone",0.5f); slider("Wärme","skinWarmth",0.5f);
+        theme::section("AUGEN");
+        {
+            auto& eyes=catalog["eyeMaterials"];
+            int current=state.value("eyes",0);
+            std::vector<size_t> shown;
+            for(size_t i=0;i<eyes.size();++i) if(eyeColor(eyes[i]["name"])) shown.push_back(i);
+            ImGui::TextUnformatted("Augenfarbe");
+            float size=S(34), gap=S(6), used=0;
+            for(size_t k=0;k<shown.size();++k) {
+                auto* e=eyeColor(eyes[shown[k]]["name"]);
+                if(k && used+size<=width) ImGui::SameLine(0,gap); else if(k) used=0;
+                ImGui::PushID(int(k));
+                if(theme::swatch("##eye",e->rgb,current==int(shown[k]),size)) { state["eyes"]=shown[k]; dirty_=true; }
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",e->name);
+                ImGui::PopID(); used+=size+gap;
             }
         }
+        if(assetSlot(human,"Augenmodell","eyes",[](const std::string& n) { return n.rfind("eyes_",0)==0; },false)) dirty_=true;
+        theme::section("HAARE");
+        if(assetSlot(human,"Frisur","hair",[](const std::string& n) { return n.rfind("hair_",0)==0; },true)) dirty_=true;
+        // CC-BY assets need visible attribution; show it while such a style is selected.
+        for(auto& a:catalog["assets"]) if(a["kind"]=="hair" && a.value("license",std::string("CC0"))!="CC0")
+            for(auto& selected:state["assets"]) if(selected==a["name"]) {
+                std::string credit="Frisur von "+a.value("author",std::string("unbekannt"))+" ("+a["license"].get<std::string>()+")";
+                theme::muted(credit.c_str());
+            }
+        slider("Volumen","hairVolume",0.45f);
+        bool custom=state.contains("hairColor");
+        if(theme::toggle("Eigene Haarfarbe","##hair-color",&custom)) {
+            if(custom) { auto& c=render::Human::hairShades()[2].rgb; state["hairColor"]={c[0],c[1],c[2]}; }
+            else state.erase("hairColor");
+            dirty_=true;
+        }
+        if(custom) {
+            auto& shades=render::Human::hairShades();
+            float size=S(34), gap=S(6), used=0;
+            for(size_t i=0;i<shades.size();++i) {
+                if(i && used+size<=width) ImGui::SameLine(0,gap); else if(i) used=0;
+                ImGui::PushID(int(i));
+                if(theme::swatch("##shade",shades[i].rgb,sameColor(state["hairColor"],shades[i].rgb),size)) {
+                    state["hairColor"]={shades[i].rgb[0],shades[i].rgb[1],shades[i].rgb[2]}; dirty_=true;
+                }
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",shades[i].name);
+                ImGui::PopID(); used+=size+gap;
+            }
+            // Fine tuning in HSV; the colour itself is stored as sRGB.
+            float h=0,s=0,v=0;
+            auto& c=state["hairColor"];
+            ImGui::ColorConvertRGBtoHSV(c[0].get<float>(),c[1].get<float>(),c[2].get<float>(),h,s,v);
+            bool changed=theme::slider("Farbton","##hair-h",&h,0,1,"%.2f");
+            changed|=theme::slider("Sättigung","##hair-s",&s,0,1,"%.2f");
+            changed|=theme::slider("Helligkeit","##hair-v",&v,0,1,"%.2f");
+            if(changed) { float r,g,b; ImGui::ColorConvertHSVtoRGB(h,s,v,r,g,b); state["hairColor"]={r,g,b}; dirty_=true; }
+        } else theme::muted("Die Frisur behält ihre natürliche Farbe.");
+        if(assetSlot(human,"Augenbrauen","eyebrows",[](const std::string& n) { return n.rfind("eyebrows_",0)==0; },true)) dirty_=true;
+        if(assetSlot(human,"Wimpern","eyelashes",[](const std::string& n) { return n.rfind("eyelashes_",0)==0; },true)) dirty_=true;
+        if(state.contains("hairColor")) theme::muted("Augenbrauen und Wimpern übernehmen die Haarfarbe.");
+    } else {
+        theme::section("KLEIDUNG");
+        if(theme::toggle("In Vorschau zeigen","##show-clothes",&showClothes_)) dirty_=true;
+        if(assetSlot(human,"Outfit","outfit",isOutfit,true)) dirty_=true;
+        if(assetSlot(human,"Schuhe","shoes",isShoes,true)) dirty_=true;
+        if(assetSlot(human,"Hut","hat",isHat,true)) dirty_=true;
+        theme::muted("Die Kleidung passt sich automatisch an deine Körperform an.");
     }
     ImGui::EndChild();
     float bottom=std::max(ImGui::GetCursorScreenPos().y,screen.y-S(264));
@@ -150,8 +421,8 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
         ImGuiWindowFlags_NoBackground|ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
     theme::section("VORSCHAU");
     theme::slider("Drehen","##orbit",&orbit,0,360,"%.0f°");
-    theme::slider("Abstand","##distance",&distance,1.5f,6,"%.1f m");
-    theme::muted("Ohne Kleidung, damit du jede Form gut erkennen kannst.");
+    theme::slider("Abstand","##distance",&distance,0.5f,6,"%.1f m");
+    theme::muted(showClothes_?"Mit Kleidung, so wie du im Spiel aussiehst.":"Ohne Kleidung, damit du jede Form gut erkennen kannst.");
     if(theme::action("Vorlage zurücksetzen",width*0.53f)) {
         human.applyTemplate(state.value("template",std::string("male"))=="female"?render::Human::Template::Female:render::Human::Template::Male); dirty_=true;
     }
@@ -160,7 +431,7 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
         if(human.loadPreset(preset)) { state["enabled"]=true; dirty_=true; error_.clear(); }
         else error_="Kein gültiger gespeicherter Charakter gefunden.";
     }
-    if(dirty_ && human.rebuild(character,true)) { dirty_=false; error_.clear(); }
+    if(dirty_ && human.rebuild(character,!showClothes_)) { dirty_=false; error_.clear(); }
     else if(dirty_) error_="Die Vorschau konnte nicht aktualisiert werden.";
     Action action=Action::None;
     ImGui::BeginDisabled(dirty_);

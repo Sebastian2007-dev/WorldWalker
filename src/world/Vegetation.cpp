@@ -418,9 +418,20 @@ void Vegetation::build(Cell& c) {
                 }
             }
         }
+    c.variantCounts.assign(variants_.size(), 0);
+    for (auto& inst : c.instances) ++c.variantCounts[inst.variant];
+}
+
+float Vegetation::maxRadius(double camLat) {
+    const double size = 1.0 / double(1 << kCellLevel);
+    double cellArea = size * geo::metersPerDegLat(camLat) * size * std::max(1.0, geo::metersPerDegLon(camLat));
+    // 90 % of the slots, minus the margin update() adds around the radius.
+    double r = std::sqrt(0.9 * kMaxCells * cellArea / 3.14159265358979) - 0.7 * size * geo::metersPerDegLat(camLat);
+    return float(std::max(r, 300.0));
 }
 
 void Vegetation::update(const glm::dvec3& camEcef, double camLat, double camLon, float radius) {
+    radius = std::min(radius, maxRadius(camLat));
     if (variants_.empty()) return;
     uint64_t frame = ++frame_;
 
@@ -500,10 +511,22 @@ void Vegetation::beginFrame(uint32_t frameIndex, const glm::dvec3& camEcef) {
     if (variants_.empty()) return;
     // Per-frame cell table, camera relative.
     auto* cells = static_cast<render::VegCell*>(cellBuffers_[frameIndex].mapped);
+    // Nearest cells first, and only as many as the visible-tree buckets can hold: in a dense forest with a long view
+    // distance the far cells are left out instead of arbitrary ones (which used to drop trees right next to the
+    // camera). Every instance ends in at most one bucket of its variant, so a variant's total never overflows the
+    // coarsest bucket.
+    std::vector<std::pair<double, Cell*>> ready;
+    for (auto& [k, c] : cells_)
+        if (c->state.load() == 2 && !c->instances.empty()) ready.push_back({glm::length(c->origin - camEcef), c.get()});
+    std::sort(ready.begin(), ready.end(), [](auto& a, auto& b) { return a.first < b.first; });
+    std::vector<uint32_t> budget(variants_.size(), kLodCaps[2]);
     uint32_t n = 0;
     size_t total = 0;
-    for (auto& [k, c] : cells_) {
-        if (c->state.load() != 2 || c->instances.empty()) continue;
+    for (auto& [dist, c] : ready) {
+        bool fits = true;
+        for (size_t v = 0; v < c->variantCounts.size(); ++v) fits &= c->variantCounts[v] <= budget[v];
+        if (!fits) break;
+        for (size_t v = 0; v < c->variantCounts.size(); ++v) budget[v] -= c->variantCounts[v];
         render::VegCell& vc = cells[n++];
         vc.originRel = glm::vec3(c->origin - camEcef);
         vc.firstInstance = c->slot * kCellCapacity;

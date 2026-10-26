@@ -28,11 +28,17 @@ public:
     void update(const glm::dvec3& camEcef, double camLat, double camLon);
     void draw(VkCommandBuffer cmd, VkPipelineLayout layout, VkDeviceAddress frameData,
               const glm::dvec3& camEcef, const glm::vec4 frustum[6]);
+    // Lake surfaces (water.vert/.frag) of the chunks drawn last frame that have a lake level. Bind the water pipeline
+    // first; draw after the opaque scene.
+    void drawWater(VkCommandBuffer cmd, VkPipelineLayout layout, VkDeviceAddress frameData,
+                   const glm::dvec3& camEcef, const glm::vec4 frustum[6]);
 
     size_t chunkCount() const { return chunks_.size(); }
     size_t drawnCount() const { return drawList_.size(); }
     size_t inFlight() const { return inFlight_.load(); }
     bool groundReady() const { return groundReady_; }
+
+    float detail = 1.0f;  // scales the distance up to which nodes are refined (graphics quality)
 
 private:
     struct Chunk {
@@ -42,6 +48,8 @@ private:
         gfx::Buffer buffer;
         glm::dvec3 origin{0};
         double radius = 0;
+        glm::vec3 up{0, 0, 1};     // local vertical at the chunk centre
+        float waterAbove = -1e9f;  // lake level relative to the origin along `up`; -1e9 without water cover
         std::atomic<uint64_t> lastUsed{0};
         // CPU results handed from the worker to the main thread
         std::vector<uint8_t> payload;
@@ -54,6 +62,8 @@ private:
     std::shared_ptr<Chunk> request(int level, int64_t y, int64_t x, float priority);
     bool visit(int level, int64_t y, int64_t x, const glm::dvec3& cam);
     void build(Chunk& c);
+    void drawChunks(VkCommandBuffer cmd, VkPipelineLayout layout, VkDeviceAddress frameData, const glm::dvec3& camEcef,
+                    const glm::vec4 frustum[6], bool lakesOnly);
 
     gfx::Device* dev_ = nullptr;
     WorldData* data_ = nullptr;

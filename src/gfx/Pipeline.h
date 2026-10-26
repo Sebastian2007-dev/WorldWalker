@@ -16,6 +16,8 @@ public:
     void init(Device& dev);
     void shutdown();
     uint32_t add(const Image& img, VkSampler sampler);
+    // Returns a slot for reuse once no frame in flight can still read it (render targets that get recreated).
+    void release(uint32_t index);
     VkDescriptorSetLayout layout() const { return layout_; }
     VkDescriptorSet set() const { return set_; }
     VkPipelineLayout pipelineLayout() const { return pipelineLayout_; }
@@ -30,6 +32,7 @@ private:
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkSampler linearRepeat_ = VK_NULL_HANDLE, linearClamp_ = VK_NULL_HANDLE;
     uint32_t next_ = 0;
+    std::vector<std::pair<uint32_t, uint64_t>> released_;  // slot, frame number at release
 };
 
 struct GraphicsPipelineDesc {

@@ -12,7 +12,7 @@ public:
     float orbit = 180, distance = 3.5f;
 private:
     nlohmann::json original_;
-    bool open_ = false, dirty_ = false;
+    bool open_ = false, dirty_ = false, showClothes_ = false;
     int tab_ = 0;
     char filter_[96]{};
     std::string error_;

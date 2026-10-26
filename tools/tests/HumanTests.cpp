@@ -74,8 +74,23 @@ int main() {
             human.state=defaults; human.state["assets"]=nlohmann::json::array({asset["name"]});
             rebuild(); frame();
         }
+        // Random characters, hair colour and skin tone survive a save and load, and always rebuild.
+        for(uint32_t seed:{1u,2u,3u,4u,5u,6u,7u,8u}) {
+            human.randomize(seed); auto rolled=human.state;
+            rebuild(); frame();
+            require(human.savePreset(temporary),"save random character"); human.reset();
+            require(human.loadPreset(temporary) && human.state==rolled,"random character round trip");
+        }
+        human.state=defaults; human.state["hairColor"]={0.9f,0.1f,0.2f}; human.state["skinTone"]=0.2f;
+        human.state["assets"]=nlohmann::json::array({"hair_long01","eyebrows_eyebrow001","eyelashes_eyelashes01"});
+        rebuild(); frame();
+        { std::ofstream f(temporary); f << R"({"version":1,"hairColor":[1,"x",0]})"; }
+        auto before=human.state;
+        require(!human.loadPreset(temporary) && human.state==before,"invalid hair colour must leave state intact");
+        { std::ofstream f(temporary); f << R"({"version":1})"; }
+        require(human.loadPreset(temporary) && !human.state.contains("hairColor"),"preset without hair colour keeps natural hair");
         for(int i=0;i<3;++i) frame();
-        std::puts("PASS: preset round trip, corrupt preset rollback, extreme body shapes, all fitted assets, repeated GPU mesh replacement");
+        std::puts("PASS: preset round trip, corrupt preset rollback, extreme body shapes, all fitted assets, random characters, hair colour, repeated GPU mesh replacement");
     } catch(const std::exception& e) { std::fprintf(stderr,"FAIL: %s\n",e.what()); result=1; }
     std::error_code error; std::filesystem::remove(temporary,error);
     device.waitIdle(); character.shutdown(); bindless.shutdown(); device.shutdown();

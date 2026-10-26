@@ -1,0 +1,13 @@
+# MakeHuman Material definition
+
+name hair_01
+
+// Color shading attributes
+diffuseColor  0.4 0.4 0.4
+specularColor  0 0 0
+shininess 0
+opacity 1
+
+// Textures and properties
+diffuseTexture hair_01diffuse.png
+

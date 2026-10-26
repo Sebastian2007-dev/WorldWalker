@@ -209,7 +209,7 @@ void Device::createSwapchain() {
     vkGetPhysicalDeviceSurfacePresentModesKHR(phys_, surface_, &n, modes.data());
     VkPresentModeKHR mode = VK_PRESENT_MODE_FIFO_KHR;
     for (auto m : modes)
-        if (m == VK_PRESENT_MODE_MAILBOX_KHR) mode = m;
+        if (m == VK_PRESENT_MODE_MAILBOX_KHR && !vsync) mode = m;
 
     int w, h;
     glfwGetFramebufferSize(window_, &w, &h);
@@ -328,6 +328,27 @@ void Device::endFrame(FrameContext& fc) {
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) resized = true;
     frame_ = (frame_ + 1) % kFramesInFlight;
     ++frameNumber_;
+}
+
+bool Device::integratedGpu() const {
+    VkPhysicalDeviceProperties p;
+    vkGetPhysicalDeviceProperties(phys_, &p);
+    return p.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU || p.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU;
+}
+
+uint64_t Device::deviceLocalBytes() const {
+    VkPhysicalDeviceMemoryProperties m;
+    vkGetPhysicalDeviceMemoryProperties(phys_, &m);
+    uint64_t best = 0;
+    for (uint32_t i = 0; i < m.memoryHeapCount; ++i)
+        if (m.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) best = std::max(best, uint64_t(m.memoryHeaps[i].size));
+    return best;
+}
+
+const char* Device::gpuName() const {
+    static VkPhysicalDeviceProperties p{};
+    vkGetPhysicalDeviceProperties(phys_, &p);
+    return p.deviceName;
 }
 
 Buffer Device::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VmaMemoryUsage mem, bool mapped,

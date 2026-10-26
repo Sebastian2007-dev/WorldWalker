@@ -212,6 +212,27 @@ float GeoRaster::height(double lat, double lon, int level) {
     double fy = (cellLat0(cy) + cellDeg_ - lat) / (cellDeg_ / lv.height) - 0.5;
     int64_t ix = int64_t(std::floor(fx)), iy = int64_t(std::floor(fy));
     float tx = float(fx - double(ix)), ty = float(fy - double(iy));
+    if (lvl == 0) {
+        // Full resolution: Catmull-Rom. Bilinear is only C0, so every 30 m cell border is a crease in the slope, and
+        // steep banks and ridges show straight edges with sharp corners. Catmull-Rom still passes through the samples.
+        auto weights = [](float t, float w[4]) {
+            float t2 = t * t, t3 = t2 * t;
+            w[0] = 0.5f * (-t3 + 2.0f * t2 - t);
+            w[1] = 0.5f * (3.0f * t3 - 5.0f * t2 + 2.0f);
+            w[2] = 0.5f * (-3.0f * t3 + 4.0f * t2 + t);
+            w[3] = 0.5f * (t3 - t2);
+        };
+        float wx[4], wy[4];
+        weights(tx, wx);
+        weights(ty, wy);
+        float h = 0.0f;
+        for (int j = 0; j < 4; ++j) {
+            float row = 0.0f;
+            for (int i = 0; i < 4; ++i) row += wx[i] * pixel(cy, cx, lvl, ix - 1 + i, iy - 1 + j);
+            h += wy[j] * row;
+        }
+        return h;
+    }
     float h00 = pixel(cy, cx, lvl, ix, iy), h10 = pixel(cy, cx, lvl, ix + 1, iy);
     float h01 = pixel(cy, cx, lvl, ix, iy + 1), h11 = pixel(cy, cx, lvl, ix + 1, iy + 1);
     return (h00 * (1 - tx) + h10 * tx) * (1 - ty) + (h01 * (1 - tx) + h11 * tx) * ty;

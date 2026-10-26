@@ -41,6 +41,10 @@ struct MeshPart {
     uint32_t firstIndex = 0, indexCount = 0;
     uint32_t albedo = 0, normal = 0;  // bindless texture indices
     bool alphaTest = false;
+    enum class Shading : uint32_t { Cloth, Skin, Hair, Eyes };  // mirrors kSkin* in shaders/skin.glsl
+    Shading shading = Shading::Cloth;
+    glm::vec3 tint{1.0f};  // linear albedo multiplier
+    bool recolor = false;  // tint replaces the texture's colour and keeps its luminance (hair colours)
 };
 
 class Character {

@@ -1,5 +1,6 @@
 // WorldWalker: walk the whole Earth at 1:1 scale.
 //   WorldWalker.exe [--lat <deg>] [--lon <deg>] [--validation] [--noshadows] [--nograss] [--notaa] [--nossao] [--clouds <0..1>]
+//                   [--quality low|medium|high|ultra]
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -11,6 +12,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <random>
+#include <thread>
 #include <filesystem>
 #include <string>
 
@@ -61,6 +64,7 @@ int main(int argc, char** argv) {
     const char* creatorTemplate = nullptr;
     bool thirdPerson = false, timeGiven = false, noShadows = false, noGrass = false, noTaa = false, noSsao = false;
     float clouds = -1.0f;
+    int qualityArg = -1;
     for (int i = 1; i < argc; ++i) {
         if (!std::strcmp(argv[i], "--lat") && i + 1 < argc) startLat = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--shot") && i + 1 < argc) shotPath = argv[++i];
@@ -79,6 +83,11 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--notaa")) noTaa = true;
         else if (!std::strcmp(argv[i], "--nossao")) noSsao = true;
         else if (!std::strcmp(argv[i], "--clouds") && i + 1 < argc) clouds = float(std::atof(argv[++i]));
+        else if (!std::strcmp(argv[i], "--quality") && i + 1 < argc) {
+            static const char* kNames[] = {"low", "medium", "high", "ultra"};
+            ++i;
+            for (int q = 0; q < 4; ++q) if (!std::strcmp(argv[i], kNames[q])) qualityArg = q;
+        }
     }
 
     for (int i = 1; i < argc; ++i)
@@ -201,12 +210,28 @@ int main(int argc, char** argv) {
         if (!shotPath) menu.open(player.lat(),player.lon());
     };
     if (creatorRequested) openCreator();
-    if (creator.isOpen() && creatorTemplate)
-        human.applyTemplate(!std::strcmp(creatorTemplate,"female") ? render::Human::Template::Female : render::Human::Template::Male);
+    if (creator.isOpen() && creatorTemplate) {
+        // "random" or "random:<seed>" rolls a random character.
+        if (!std::strncmp(creatorTemplate, "random", 6))
+            human.randomize(creatorTemplate[6] == ':' ? uint32_t(std::strtoul(creatorTemplate + 7, nullptr, 10))
+                                                      : std::random_device{}());
+        else human.applyTemplate(!std::strcmp(creatorTemplate,"female") ? render::Human::Template::Female : render::Human::Template::Male);
+    }
     fs::path settingsFile = assetDir.parent_path() / "settings.json";
     if (!shotPath) {
         ui::loadSettings(settingsFile, settings, params, player);
         if (settings.fullscreen) ui::setFullscreen(app.window, true);
+    }
+    settings.gpu = dev.gpuName();
+    // First start: pick a preset that suits this GPU.
+    if (settings.quality < 0) {
+        settings.quality = ui::detectQuality(dev.integratedGpu(), dev.deviceLocalBytes());
+        ui::applyQuality(settings.quality, params);
+        std::printf("Graphics quality for %s: preset %d\n", settings.gpu.c_str(), settings.quality);
+    }
+    if (qualityArg >= 0) {
+        settings.quality = qualityArg;
+        ui::applyQuality(qualityArg, params);
     }
     if (shotPath || timeGiven) params.timeOfDay = shotTime;
     if (noShadows) params.shadows = false;
@@ -289,7 +314,13 @@ int main(int argc, char** argv) {
         auto tA = std::chrono::steady_clock::now();
         // Paused: dt = 0 freezes movement but still lets the player settle onto freshly streamed ground.
         player.update(paused ? 0.0f : dt, in, data, veg);
-        if (creator.isOpen()) player.previewCamera(creator.distance,1.0f,creator.distance*0.5f);
+        if (creator.isOpen()) {
+            // Zooming in moves the focus from the body's centre up to the face.
+            float head = 1.6f;
+            for (auto& bone : character.skeleton()) if (bone.name == "Head") head = bone.pos.z + 0.1f;
+            float face = std::clamp((2.4f - creator.distance) / 1.6f, 0.0f, 1.0f);
+            player.previewCamera(creator.distance, 1.0f + (head - 1.0f) * face, creator.distance * 0.5f);
+        }
         render::AnimInput anim;
         anim.velocity = player.localVelocity();
         anim.grounded = player.onGround();
@@ -302,9 +333,12 @@ int main(int argc, char** argv) {
         if (creator.isOpen()) anim = render::AnimInput{};
         character.update(creator.isOpen() ? std::min(dt,0.1f) : paused ? 0.0f : std::min(dt, 0.1f), anim);
         auto tB = std::chrono::steady_clock::now();
+        terrain.detail = params.terrainDetail;
         terrain.update(player.cameraPos(), player.lat(), player.lon());
         auto tC = std::chrono::steady_clock::now();
-        veg.update(player.cameraPos(), player.lat(), player.lon(), params.impostorDistance + 200.0f);
+        // Tree view distance limited to what the vegetation cell table holds at this latitude.
+        float treeDistance = std::min(params.impostorDistance, world::Vegetation::maxRadius(player.lat()) - 200.0f);
+        veg.update(player.cameraPos(), player.lat(), player.lon(), treeDistance + 200.0f);
         grass.update(player.cameraPos());
         auto tD = std::chrono::steady_clock::now();
         auto smooth = [](float& v, float x) { v = v * 0.9f + x * 0.1f; };
@@ -325,19 +359,24 @@ int main(int argc, char** argv) {
             hud.alpha = creator.isOpen() ? 0.0f : 1.0f - menu.fade();
             ui::drawHud(player, settings, hud);
         }
-        if (settings.showDebug) {
+        if (settings.showDebug && !creator.isOpen()) {
             ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Always);
             ImGui::SetNextWindowBgAlpha(0.6f);
             ImGui::Begin("##debug", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                                                  ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing);
             ImGui::Text("%.0f FPS (%.2f ms)", fps, fps > 0 ? 1000.0f / fps : 0.0f);
-            ImGui::TextDisabled("CPU ms  Spieler %.2f  Terrain %.2f  BÃ¤ume %.2f  Render %.2f  GPU-Wait %.2f", tPlayer,
+            ImGui::TextDisabled("CPU ms  Spieler %.2f  Terrain %.2f  Bäume %.2f  Render %.2f  GPU-Wait %.2f", tPlayer,
                                 tTerrain, tVeg, tRender, tWait);
-            ImGui::Text("HÃ¶he %.1f m (Boden %.1f m)   Tempo %.1f m/s", player.altitude(), player.groundHeight(),
+            ImGui::Text("Aufl\xC3\xB6sung %.0f %%   Qualit\xC3\xA4t %d   %s", renderer.resolutionScale() * 100.0f,
+                        settings.quality, settings.gpu.c_str());
+            const render::GpuTimes& g = renderer.gpuTimes();
+            ImGui::TextDisabled("GPU ms  Schatten %.2f  Szene %.2f  SSAO %.2f  TAA %.2f  Rest %.2f  Gesamt %.2f", g.shadows,
+                                g.scene, g.ssao, g.taa, g.post, g.total);
+            ImGui::Text("Höhe %.1f m (Boden %.1f m)   Tempo %.1f m/s", player.altitude(), player.groundHeight(),
                         player.speed());
             ImGui::Text("Terrain: %zu Chunks (%zu sichtbar), %zu Jobs", terrain.chunkCount(), terrain.drawnCount(),
                         jobs.pending());
-            ImGui::Text("BÃ¤ume: %zu in %zu Zellen", veg.instanceCount(), veg.activeCells());
+            ImGui::Text("Bäume: %zu in %zu Zellen", veg.instanceCount(), veg.activeCells());
             ImGui::End();
         }
         if (!shotPath) {
@@ -372,13 +411,30 @@ int main(int argc, char** argv) {
         auto tF = std::chrono::steady_clock::now();
         smooth(tWait, ms(tE, tF));
         bool capturing = shotPath && !captureSubmitted && idleFrames > 60;
-        renderer.render(fc, player, terrain, veg, grass, character, params, time);
+        render::SceneParams frameParams = params;
+        frameParams.impostorDistance = treeDistance;
+        renderer.render(fc, player, terrain, veg, grass, character, frameParams, time);
         dev.endFrame(fc);
         smooth(tRender, ms(tF, std::chrono::steady_clock::now()));
+        if (dev.vsync != settings.vsync) {
+            dev.vsync = settings.vsync;
+            dev.resized = true;  // rebuild the swapchain with the other present mode
+        }
+        // Frame limiter: sleep most of the remaining time, then spin for an accurate frame start.
+        if (settings.fpsLimit > 0 && !shotPath) {
+            auto until = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                   std::chrono::duration<double>(1.0 / settings.fpsLimit));
+            auto sleepUntil = until - std::chrono::milliseconds(2);
+            if (std::chrono::steady_clock::now() < sleepUntil) std::this_thread::sleep_until(sleepUntil);
+            while (std::chrono::steady_clock::now() < until) std::this_thread::yield();
+        }
         if (capturing) {
             dev.waitIdle();
             std::printf("screenshot %s: %s (%.0f fps, %.2f ms)\n", shotPath, renderer.saveCapture(shotPath) ? "ok" : "failed",
                         fps, fps > 0 ? 1000.0f / fps : 0.0f);
+            const render::GpuTimes& g = renderer.gpuTimes();
+            std::printf("gpu ms: shadows %.2f scene %.2f ssao %.2f taa %.2f post %.2f total %.2f (scale %.0f %%)\n",
+                        g.shadows, g.scene, g.ssao, g.taa, g.post, g.total, renderer.resolutionScale() * 100.0f);
             break;
         }
     }

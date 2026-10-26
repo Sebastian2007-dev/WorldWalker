@@ -1,0 +1,24 @@
+# MakeHuman Material definition
+
+name wig_bun_blondeMaterial
+
+// Color shading attributes
+diffuseColor  1 1 1
+specularColor  0.09813 0.09813 0.09813
+shininess 0.05882
+opacity 0
+
+// Textures and properties
+diffuseTexture wig_bun_blonde_diff1.png
+bumpTexture wig_bun_blonde_normalmap1.png
+
+// Shader programme
+shader data/shaders/glsl/phong
+
+// Configure built-in shader defines
+shaderConfig diffuse true
+shaderConfig bump true
+shaderConfig normal  false
+shaderConfig displacement  false
+shaderConfig spec  false
+shaderConfig vertexColors false

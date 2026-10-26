@@ -1,30 +1,13 @@
 #version 460
 #include "common.glsl"
-
-layout(buffer_reference, scalar) readonly buffer CoverRef { uint d[]; };
-
-layout(push_constant, scalar) uniform Push {
-    FrameRef frame;
-    uint64_t vertices;
-    CoverRef cover;
-    vec3 originRel;
-    float level;
-    vec3 originMod;
-    float coverRes;
-} pc;
+#include "terrain.glsl"
 
 layout(location = 0) in vec3 vRel;
 layout(location = 1) in vec3 vNormal;
 layout(location = 2) in vec2 vUv;
 layout(location = 3) in vec3 vWorldMod;
+layout(location = 4) in float vAboveWater;
 layout(location = 0) out vec4 outColor;
-
-uint coverAt(ivec2 t) {
-    int res = int(pc.coverRes);
-    t = clamp(t, ivec2(0), ivec2(res - 1));
-    uint i = uint(t.y * res + t.x);
-    return (pc.cover.d[i >> 2] >> ((i & 3u) * 8u)) & 0xFFu;
-}
 
 // ESA WorldCover classes -> base albedo (linear) and roughness.
 void classMaterial(uint cls, float n, out vec3 albedo, out float rough) {
@@ -54,11 +37,30 @@ void main() {
     float res = pc.coverRes;
     vec2 jitter = (vec2(worldNoise(vWorldMod, 16.0), worldNoise(vWorldMod + 31.7, 16.0)) - 0.5) * 2.2 +
                   (vec2(worldNoise(vWorldMod, 4.0), worldNoise(vWorldMod + 17.3, 4.0)) - 0.5) * 0.8;
-    ivec2 texel = ivec2(floor(vUv * res + jitter * smoothstep(5.0, 8.0, pc.level + 0.5)));
+    vec2 coverPos = vUv * res + jitter * smoothstep(5.0, 8.0, pc.level + 0.5);
+    ivec2 texel = ivec2(floor(coverPos));
     uint cls = coverAt(texel);
-    // Water only lies flat: where the land cover says water but the terrain slopes, the cover map (10 m) and the
-    // DEM disagree about the shoreline. Show wet bank there instead of water climbing the hill.
-    if (cls == 80u && 1.0 - dot(normalize(vNormal), f.camUp) > 0.03 + worldNoise(vWorldMod, 4.0) * 0.03) cls = 90u;
+    // Lakes are a separate level surface (water.vert); here the ground only gets wet near the water. Water cover that
+    // the lake surface does not reach (chunks without a lake level, rivers above it) is still painted as water where it
+    // lies flat.
+    bool nearWater = nearWaterCover(texel);
+    float mask = 0.0, nearMask = 0.0;
+    if (nearWater) {
+        mask = waterMask(coverPos);
+        // Wider, softer mask for the wet bank around the shore.
+        nearMask = 0.25 * (waterMask(coverPos + vec2(1.2, 0.0)) + waterMask(coverPos - vec2(1.2, 0.0)) +
+                           waterMask(coverPos + vec2(0.0, 1.2)) + waterMask(coverPos - vec2(0.0, 1.2)));
+    }
+    float shoreNoise = (worldNoise(vWorldMod, 7.0) - 0.5) * 0.35 + (worldNoise(vWorldMod, 1.7) - 0.5) * 0.12;
+    bool coverWater = mask + shoreNoise > 0.5;
+    bool isFlat = 1.0 - dot(normalize(vNormal), f.camUp) <= 0.03 + worldNoise(vWorldMod, 4.0) * 0.03;
+    bool water = coverWater && isFlat && vAboveWater > 0.25;
+    // Ground: the bank, and the lake bed under the (partly transparent) shallow water.
+    if (cls == 80u) cls = 90u;
+    // Wet bank: darker towards the waterline; everything below the lake level is wet.
+    float above = vAboveWater + (worldNoise(vWorldMod, 3.0) - 0.5) * 0.3;
+    // Fades out with the blurred mask, so it ends softly where the search ring around the water ends.
+    float wet = nearWater ? (hasLake() ? 1.0 - smoothstep(0.0, 0.9, above) : 1.0) * smoothstep(0.0, 0.35, nearMask) : 0.0;
 
     float n1 = worldNoise(vWorldMod, 8.0);
     float n2 = worldNoise(vWorldMod, 1.0);
@@ -117,7 +119,7 @@ void main() {
     float slope = 1.0 - dot(n, up);
     vec3 rock = mix(vec3(0.16, 0.15, 0.14), vec3(0.26, 0.24, 0.22), n1);
     float rockMask = smoothstep(0.28, 0.42, slope + (n1 - 0.5) * 0.1);
-    if (cls != 80u) {
+    {
         albedo = mix(albedo, rock, rockMask);
         float snowLine = 2800.0 + (n3 - 0.5) * 400.0;
         float alt = f.camAltitude + dot(vRel, up);
@@ -127,46 +129,16 @@ void main() {
 
     // Micro shading from noise so close ground does not look flat.
     if (!textured) albedo *= mix(1.0, 0.8 + 0.4 * n2, detailFade);
+    // Wet bank: darker and glossier towards the waterline, muddy below it.
+    albedo = mix(albedo, mix(albedo, vec3(0.05, 0.045, 0.03), 0.45) * 0.55, wet);
+    rough = mix(rough, 0.3, wet);
 
     float sh = sunShadow(f, vRel, normalize(vNormal), 1.0);
-    vec3 color;
-    if (cls == 80u) {
-        // Water: flat surface (the DEM is noisy over lakes) with two layers of wind ripples drifting across it.
-        vec3 wn = up;
-        vec3 east = normalize(cross(vec3(0.0, 0.0, 1.0), up)), north = cross(up, east);
-        vec2 wind = vec2(0.8, 0.6) * f.time;
-        float rippleFade = 1.0 - smoothstep(80.0, 600.0, dist);
-        for (int k = 0; k < 2; ++k) {
-            float cell = k == 0 ? 6.0 : 1.5;
-            vec3 p = vWorldMod + (east * wind.x + north * wind.y) * (k == 0 ? 1.0 : -1.6);
-            float e = cell * 0.25, h0 = worldNoise(p, cell);
-            vec2 g = vec2(worldNoise(p + east * e, cell) - h0, worldNoise(p + north * e, cell) - h0) / e;
-            wn -= (east * g.x + north * g.y) * (k == 0 ? 0.12 : 0.05) * cell * rippleFade;
-        }
-        wn = normalize(wn);
-        float ndv = max(dot(wn, v), 0.0);
-        float fres = 0.02 + 0.98 * pow(1.0 - ndv, 5.0);
-        vec3 r = reflect(-v, wn);
-        if (dot(r, up) < 0.0) r = reflect(r, up);  // ripples must not reflect the underside
-        // Without screen space reflections, low reflected rays would show the bright horizon sky; on a real lake they
-        // mostly see the shore and its forest. Fade those towards a dark, lit-by-sky shore colour.
-        float rEl = dot(r, up);
-        vec3 shore = f.skyAmbient * vec3(0.10, 0.14, 0.09) + f.sunColor * f.sunIntensity * vec3(0.012, 0.018, 0.01);
-        vec3 refl = mix(shore, skyRadiance(f, r), smoothstep(0.03, 0.25, rEl));
-        // Sun glint on the ripples.
-        vec3 hv = normalize(f.sunDir + v);
-        float glint = pow(max(dot(wn, hv), 0.0), 600.0) * 60.0 * sh;
-        refl += f.sunColor * f.sunIntensity * glint;
-        // Body colour: light scattered back from inside the water, darker for steep (deep looking) views.
-        vec3 body = (f.skyAmbient * 0.6 + f.sunColor * f.sunIntensity * max(dot(up, f.sunDir), 0.0) * 0.15) *
-                    vec3(0.02, 0.05, 0.05) * mix(1.4, 0.7, ndv);
-        color = mix(body, refl, fres);
-    } else {
-        float ao = cls == 10u ? 0.7 : 1.0;  // canopy shade on forest floor
-        color = shadeSurface(f, albedo, n, v, rough, ao, sh);
-        // Beyond the shadow range the canopy shade on forest floor is approximated.
-        if (cls == 10u) color *= mix(1.0, 0.75, smoothstep(240.0, 360.0, dist));
-    }
+    float ao = cls == 10u ? 0.7 : 1.0;  // canopy shade on forest floor
+    vec3 color = shadeSurface(f, albedo, n, v, rough, ao, sh);
+    // Beyond the shadow range the canopy shade on forest floor is approximated.
+    if (cls == 10u) color *= mix(1.0, 0.75, smoothstep(240.0, 360.0, dist));
+    if (water) color = shadeWater(f, vWorldMod, v, dist, sh);
 
     outColor = vec4(applyFog(f, color, vRel), 1.0);
 }

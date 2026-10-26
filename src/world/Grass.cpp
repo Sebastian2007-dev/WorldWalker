@@ -1,6 +1,8 @@
 #include "world/Grass.h"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <cstring>
 
 #include "geo/Geodesy.h"
@@ -55,15 +57,47 @@ void Grass::shutdown() {
 
 void Grass::build(WorldData& data, Field& f) {
     f.samples.resize(size_t(kRes) * kRes);
+    std::vector<double> heights(f.samples.size());
+    double level = std::numeric_limits<double>::quiet_NaN();
     for (int j = 0; j < kRes; ++j)
         for (int i = 0; i < kRes; ++i) {
             double x = f.x0 + i * double(kCell), y = f.y0 + j * double(kCell);
             double lat, lon, h;
             geo::fromEcef(f.anchor + f.east * x + f.north * y, lat, lon, h);
-            glm::dvec3 ground = geo::toEcef(lat, lon, data.meshHeight(lat, lon));
-            f.samples[size_t(j) * kRes + i] =
-                glm::vec2(float(glm::dot(ground - f.anchor, f.up)), float(data.landCover(lat, lon)));
+            size_t k = size_t(j) * kRes + i;
+            heights[k] = data.meshHeight(lat, lon);
+            glm::dvec3 ground = geo::toEcef(lat, lon, heights[k]);
+            uint8_t cls = data.landCover(lat, lon);
+            if (cls == data::lc::Water && std::isnan(level)) level = data.lakeLevel(lat, lon);
+            // Rounded shore like the terrain shader: water if most of the cover around (+-5 m) is water.
+            double dLat = 5.0 / geo::metersPerDegLat(lat), dLon = 5.0 / std::max(1.0, geo::metersPerDegLon(lat));
+            int water = 0;
+            for (auto [a, b] : {std::pair{dLat, 0.0}, std::pair{-dLat, 0.0}, std::pair{0.0, dLon}, std::pair{0.0, -dLon}})
+                water += data.landCover(lat + a, lon + b) == data::lc::Water;
+            if (water >= 2) cls = data::lc::Water;
+            f.samples[k] = glm::vec2(float(glm::dot(ground - f.anchor, f.up)), float(cls));
         }
+    // Like the terrain shader: near water cover, ground below the lake level is water, so no blades stand in it.
+    if (!std::isnan(level)) {
+        // The lake surface reaches about two cover texels (~7 m) beyond the water cover and floods ground below the
+        // level there; no blades in that zone (a little above the level too: the mesh and these samples differ by a few
+        // centimetres). A round reach, so the edge of the blade-free zone follows the shore.
+        level += 0.2;
+        const int reach = 14;  // samples (7 m)
+        std::vector<uint8_t> near(f.samples.size(), 0);
+        for (int j = 0; j < kRes; ++j)
+            for (int i = 0; i < kRes; ++i) {
+                if (f.samples[size_t(j) * kRes + i].y != float(data::lc::Water)) continue;
+                for (int dj = -reach; dj <= reach; ++dj)
+                    for (int di = -reach; di <= reach; ++di) {
+                        int ii = i + di, jj = j + dj;
+                        if (di * di + dj * dj > reach * reach) continue;
+                        if (ii >= 0 && jj >= 0 && ii < kRes && jj < kRes) near[size_t(jj) * kRes + ii] = 1;
+                    }
+            }
+        for (size_t k = 0; k < f.samples.size(); ++k)
+            if (near[k] && heights[k] < level) f.samples[k].y = float(data::lc::Water);
+    }
     f.done = true;
 }
 
@@ -113,17 +147,19 @@ void Grass::update(const glm::dvec3& camEcef) {
     jobs_->submit(0.0f, [data = data_, f] { build(*data, *f); });
 }
 
-void Grass::draw(VkCommandBuffer cmd, VkDeviceAddress frameData, const glm::dvec3& camEcef) {
+void Grass::draw(VkCommandBuffer cmd, VkDeviceAddress frameData, const glm::dvec3& camEcef, float density) {
     if (slot_ < 0) return;
     glm::dvec3 d = camEcef - active_->anchor;
     GrassPush p{};
     p.frame = frameData;
     p.field = buffers_[slot_].address;
     p.anchorRel = glm::vec3(-d);
-    p.spacing = kSpacing;
+    density = std::clamp(density, 0.0f, 1.0f);
+    p.spacing = kSpacing / std::sqrt(0.3f + 0.7f * density);
     p.camLocal = glm::vec2(float(glm::dot(d, active_->east)), float(glm::dot(d, active_->north)));
-    p.gridN = uint32_t(std::ceil(2.0f * kRadius / kSpacing));
-    p.radius = kRadius;
+    float radius = kRadius * (0.55f + 0.45f * density);
+    p.gridN = uint32_t(std::ceil(2.0f * radius / p.spacing));
+    p.radius = radius;
     VkPipelineLayout layout = bindless_->pipelineLayout();
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe_);
     vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);

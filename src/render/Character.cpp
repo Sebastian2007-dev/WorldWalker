@@ -17,6 +17,8 @@ struct SkinPush {
     glm::mat4 model;
     VkDeviceAddress frame, vertices, joints;
     uint32_t albedo, normal, alphaTest;
+    uint32_t material;
+    glm::vec3 tint;
 };
 static_assert(sizeof(SkinPush) <= gfx::kPushConstantSize);
 
@@ -489,7 +491,8 @@ void Character::draw(VkCommandBuffer cmd, VkDeviceAddress frameData, const glm::
     for (const MeshPart& m : parts_) {
         if (m.indexCount == 0) continue;
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadow ? shadowPipe_ : (m.alphaTest ? hairPipe_ : pipe_));
-        SkinPush p{model, frameData, vertices_.address, joints_[frameIndex_].address, m.albedo, m.normal, m.alphaTest ? 1u : 0u};
+        SkinPush p{model,    frameData, vertices_.address, joints_[frameIndex_].address, m.albedo, m.normal,
+                   m.alphaTest ? 1u : 0u, uint32_t(m.shading) | (m.recolor ? 0x100u : 0u), m.tint};
         vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_ALL, 0, sizeof(p), &p);
         vkCmdDrawIndexed(cmd, m.indexCount, 1, m.firstIndex, 0, 0);
     }

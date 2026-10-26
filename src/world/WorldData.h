@@ -1,6 +1,8 @@
 #pragma once
 #include <atomic>
 #include <filesystem>
+#include <mutex>
+#include <unordered_map>
 
 #include "core/Jobs.h"
 
@@ -33,6 +35,10 @@ public:
     // Height for a sampling grid with the given spacing (uses DEM overviews when coarse).
     double heightForSpacing(double lat, double lon, double spacingDeg);
     uint8_t landCover(double lat, double lon, double spacingDeg = 0.0);
+    // Surface level of the lake (connected water cover) at a point: one value per lake, so all terrain chunks and the
+    // grass agree on it. NaN where there is no water within one lake grid cell. Cached; safe to call from workers.
+    double lakeLevel(double lat, double lon);
+    static constexpr double kLakeGridDeg = 1.0 / 5000.0;  // ~22 m
 
     // Deterministic micro relief in metres (adds detail below the 30 m DEM resolution).
     static double microRelief(double lat, double lon);
@@ -49,6 +55,9 @@ private:
     std::atomic<bool> prefetching_{false};
     data::GeoRaster dem_;
     data::GeoRaster cover_;
+    std::mutex lakeMutex_;
+    std::mutex lakeFillMutex_;  // one flood fill at a time: chunks of the same lake then reuse its result
+    std::unordered_map<uint64_t, float> lakeCells_;  // lake grid cell -> level of its lake
 };
 
 // Small deterministic hash helpers shared by placement code.

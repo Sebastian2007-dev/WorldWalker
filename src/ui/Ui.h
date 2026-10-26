@@ -2,6 +2,7 @@
 // Game UI: theme and fonts, in-game HUD and the pause menu (Dear ImGui).
 #include <cstdint>
 #include <filesystem>
+#include <string>
 
 struct GLFWwindow;
 namespace game { class Player; }
@@ -15,7 +16,17 @@ struct Settings {
     bool crosshair = true;
     bool invertY = false;
     bool fullscreen = false;
+    int quality = -1;      // Quality preset; -1 until the first start picked one for this GPU
+    bool vsync = false;
+    int fpsLimit = 0;      // frames per second, 0 = unlimited
+    std::string gpu;       // adapter name, shown next to the presets (not saved)
 };
+
+// Graphics presets. Custom means the player changed individual settings after choosing one.
+enum Quality { kQualityLow, kQualityMedium, kQualityHigh, kQualityUltra, kQualityCustom };
+void applyQuality(int quality, render::SceneParams& p);
+// Starting preset for a GPU: integrated or little video memory -> Low, mid-range -> Medium, else High.
+int detectQuality(bool integratedGpu, uint64_t deviceLocalBytes);
 
 // Settings, scene parameters and player tuning persisted as JSON.
 void loadSettings(const std::filesystem::path& file, Settings& s, render::SceneParams& p, game::Player& player);

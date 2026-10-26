@@ -1,0 +1,23 @@
+# MakeHuman Material definition
+
+name hairMaterial
+
+// Color shading attributes
+diffuseColor  1 1 1
+specularColor  0 0 0
+shininess 0.2039
+opacity 1
+
+// Textures and properties
+diffuseTexture Hair_bun_brown.png
+
+// Shader programme
+shader data/shaders/glsl/phong
+
+// Configure built-in shader defines
+shaderConfig diffuse true
+shaderConfig bump false
+shaderConfig normal  false
+shaderConfig displacement  false
+shaderConfig spec  false
+shaderConfig vertexColors false

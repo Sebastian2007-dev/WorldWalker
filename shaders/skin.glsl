@@ -11,4 +11,9 @@ layout(push_constant, scalar) uniform Push {
     uint albedo;
     uint normal;
     uint alphaTest;
+    uint material;     // kSkin* shading model, optionally | kSkinRecolor
+    vec3 tint;         // linear albedo multiplier (with kSkinRecolor: multiplies the texture's luminance instead)
 } pc;
+
+const uint kSkinCloth = 0u, kSkinBody = 1u, kSkinHair = 2u, kSkinEyes = 3u;
+const uint kSkinRecolor = 0x100u;

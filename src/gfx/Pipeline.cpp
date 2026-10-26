@@ -1,4 +1,6 @@
 #include "gfx/Pipeline.h"
+#include <algorithm>
+#include <stdexcept>
 
 namespace gfx {
 
@@ -73,7 +75,16 @@ void Bindless::shutdown() {
 }
 
 uint32_t Bindless::add(const Image& img, VkSampler sampler) {
-    uint32_t idx = next_++;
+    uint32_t idx = next_;
+    auto reusable = std::find_if(released_.begin(), released_.end(),
+                                 [&](auto& r) { return r.second + kFramesInFlight < dev_->frameNumber(); });
+    if (reusable != released_.end()) {
+        idx = reusable->first;
+        released_.erase(reusable);
+    } else {
+        if (next_ >= kMaxBindlessTextures) throw std::runtime_error("bindless texture slots exhausted");
+        ++next_;
+    }
     VkDescriptorImageInfo ii{sampler, img.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
     w.dstSet = set_;
@@ -85,6 +96,8 @@ uint32_t Bindless::add(const Image& img, VkSampler sampler) {
     vkUpdateDescriptorSets(dev_->device(), 1, &w, 0, nullptr);
     return idx;
 }
+
+void Bindless::release(uint32_t index) { released_.push_back({index, dev_->frameNumber()}); }
 
 VkPipeline createGraphicsPipeline(Device& dev, VkPipelineLayout layout, const GraphicsPipelineDesc& d) {
     VkShaderModule vs = dev.loadShader(d.vs);

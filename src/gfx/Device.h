@@ -62,6 +62,11 @@ public:
     const VkPhysicalDeviceProperties& props() const { return props_; }
 
     bool resized = false;
+    bool vsync = false;  // FIFO instead of mailbox; set `resized` after changing it to rebuild the swapchain
+    // Adapter class for picking a default quality level.
+    bool integratedGpu() const;
+    uint64_t deviceLocalBytes() const;
+    const char* gpuName() const;
 
 private:
     void createSwapchain();

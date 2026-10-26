@@ -15,6 +15,9 @@ import bpy, sys, os, json, gzip, struct, glob, re
 import numpy as np
 from mathutils import Matrix, Vector
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+import human_assets  # noqa: E402  (proxy asset fitting, shared with the Blender-free asset baker)
+
 argv = sys.argv[sys.argv.index("--") + 1:]
 ASSET_DIR, OUT = os.path.abspath(argv[0]), os.path.abspath(argv[1])
 os.makedirs(os.path.join(OUT, "tex"), exist_ok=True)
@@ -305,150 +308,21 @@ def copy_texture(path, name):
     return out.replace("\\", "/")
 
 
-def parse_mhmat(path):
-    mat = {}
-    folder = os.path.dirname(path)
-    for line in open(path, encoding="utf-8", errors="replace"):
-        w = line.split()
-        if len(w) >= 2 and w[0] in ("diffuseTexture", "normalmapTexture", "transparencyMapTexture"):
-            p = os.path.join(folder, w[1])
-            if not os.path.isfile(p):
-                p = os.path.join(ASSET_DIR, w[1])
-            mat[w[0]] = p
-        elif len(w) == 4 and w[0] == "diffuseColor":
-            mat["diffuseColor"] = [float(x) for x in w[1:]]
-    return mat
-
-
-def parse_obj(path):
-    vt, faces = [], []
-    for line in open(path, encoding="utf-8", errors="replace"):
-        if line.startswith("vt "):
-            vt.append(tuple(float(x) for x in line.split()[1:3]))
-        elif line.startswith("f "):
-            corners = []
-            for c in line.split()[1:]:
-                p = c.split("/")
-                corners.append((int(p[0]) - 1, int(p[1]) - 1 if len(p) > 1 and p[1] else -1))
-            faces.append(corners)
-    return vt, faces
-
-
-def parse_mhclo(path):
-    folder = os.path.dirname(path)
-    info = {"verts": [], "delete": [], "scale": {}, "material": None, "obj": None, "name": None, "z_depth": 50}
-    status = ""
-    for raw in open(path, encoding="utf-8", errors="replace"):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        w = line.split()
-        if status == "v":
-            if w[0].lstrip("-").isdigit():
-                if len(w) == 1:
-                    info["verts"].append(((int(w[0]),) * 3, (1.0, 0.0, 0.0), (0.0, 0.0, 0.0)))
-                else:
-                    info["verts"].append(((int(w[0]), int(w[1]), int(w[2])), tuple(float(x) for x in w[3:6]),
-                                          tuple(float(x) for x in w[6:9])))
-                continue
-            status = ""
-        if status == "d":
-            if w[0].isdigit():
-                k = 0
-                while k < len(w):
-                    if k + 2 < len(w) and w[k + 1] == "-":
-                        info["delete"].extend(range(int(w[k]), int(w[k + 2]) + 1))
-                        k += 3
-                    else:
-                        info["delete"].append(int(w[k]))
-                        k += 1
-                continue
-            status = ""
-        key = w[0]
-        if key == "verts":
-            status = "v"
-        elif key == "delete_verts":
-            status = "d"
-        elif key in ("x_scale", "y_scale", "z_scale"):
-            info["scale"][key] = (int(w[1]), int(w[2]), float(w[3]))
-        elif key == "material":
-            info["material"] = os.path.join(folder, w[1])
-        elif key == "obj_file":
-            info["obj"] = os.path.join(folder, w[1])
-        elif key == "name":
-            info["name"] = w[1]
-        elif key == "z_depth":
-            info["z_depth"] = int(w[1])
-    return info
-
-
-def write_asset(kind, mhclo_path):
-    """Fitted asset: every render vertex follows three base vertices plus an offset scaled by the body's size
-    (MakeHuman's proxy fitting, evaluated by the engine for every body shape)."""
-    info = parse_mhclo(mhclo_path)
-    if not info["obj"] or not os.path.isfile(info["obj"]) or not info["verts"]:
-        return None
-    vt, faces = parse_obj(info["obj"])
-    name = kind + "_" + re.sub(r"[^a-z0-9]+", "_", (info["name"] or os.path.basename(mhclo_path)).lower()).strip("_")
-    # Offsets: MPFB's mhclo reader maps (d0, d1, d2) -> Blender (d0, -d2, d1); each Blender axis is scaled by the
-    # body's extent between two reference vertices: x by x_scale (along x), y by z_scale (along y), z by y_scale
-    # (along z). Model space flips x and y.
-    scale_pairs = [info["scale"].get("x_scale"), info["scale"].get("z_scale"), info["scale"].get("y_scale")]
-    if any(p is None for p in scale_pairs):
-        scale_pairs = None
-    key_to_rv, rverts, tris = {}, [], []
-    for face in faces:
-        corners = []
-        for vi, ti in face:
-            uv = vt[ti] if 0 <= ti < len(vt) else (0.0, 0.0)
-            key = (vi, ti)
-            rv = key_to_rv.get(key)
-            if rv is None:
-                refs, ws, d = info["verts"][vi]
-                off = np.array([d[0], -d[2], d[1]]) * FACE
-                rv = key_to_rv[key] = len(rverts)
-                rverts.append((refs, ws, off, uv[0], 1.0 - uv[1]))
-            corners.append(rv)
-        for k in range(1, len(corners) - 1):
-            tris.append((corners[0], corners[k], corners[k + 1]))
-    mat = parse_mhmat(info["material"]) if info["material"] and os.path.isfile(info["material"]) else {}
-    albedo = copy_texture(mat.get("diffuseTexture"), name + "_albedo")
-    normal = copy_texture(mat.get("normalmapTexture"), name + "_nrm")
-    alpha_tex = mat.get("transparencyMapTexture")
-    # asset_<name>.bin: u32 R; R x (u32x3 refs, float3 weights, float3 offset, float u, float v); u32 T, T x u32x3;
-    #                   u8 has_scale + 3 x (u32 a, u32 b, float reference); u32 D, D x u32 deleted base vertices
-    with open(os.path.join(OUT, "asset_" + name + ".bin"), "wb") as f:
-        f.write(struct.pack("<I", len(rverts)))
-        for refs, ws, off, u, v in rverts:
-            f.write(struct.pack("<3I3f3f2f", *refs, *ws, *off, u, v))
-        f.write(struct.pack("<I", len(tris)))
-        f.write(np.asarray(tris, np.uint32).tobytes())
-        f.write(struct.pack("<B", 1 if scale_pairs else 0))
-        for p in (scale_pairs or [(0, 0, 1.0)] * 3):
-            f.write(struct.pack("<IIf", p[0], p[1], p[2]))
-        f.write(struct.pack("<I", len(info["delete"])))
-        f.write(np.asarray(info["delete"], np.uint32).tobytes())
-    log("asset", kind, name, len(rverts), "vertices", len(tris), "triangles", "delete", len(info["delete"]))
-    return {"kind": kind, "name": name, "file": "asset_" + name + ".bin", "albedo": albedo, "normal": normal,
-            "alphaTest": kind in ("hair", "eyebrows", "eyelashes") or bool(alpha_tex), "zDepth": info["z_depth"],
-            "color": mat.get("diffuseColor")}
-
-
 assets, skins, eye_materials = [], [], []
-for kind in ("eyes", "eyebrows", "eyelashes", "hair", "clothes"):
+for kind in human_assets.KINDS:
     for mhclo in sorted(glob.glob(os.path.join(ASSET_DIR, kind, "*", "*.mhclo"))):
-        a = write_asset(kind, mhclo)
+        a = human_assets.write_asset(kind, mhclo, OUT, ASSET_DIR, copy_texture)
         if a:
             assets.append(a)
 # Eye colours are separate materials for the eye mesh.
 for mhmat in sorted(glob.glob(os.path.join(ASSET_DIR, "eyes", "materials", "*.mhmat"))):
     nm = os.path.splitext(os.path.basename(mhmat))[0]
-    tex = copy_texture(parse_mhmat(mhmat).get("diffuseTexture"), "eye_" + nm)
+    tex = copy_texture(human_assets.parse_mhmat(mhmat, ASSET_DIR).get("diffuseTexture"), "eye_" + nm)
     if tex:
         eye_materials.append({"name": nm, "albedo": tex})
 for mhmat in sorted(glob.glob(os.path.join(ASSET_DIR, "skins", "*", "*.mhmat"))):
     nm = os.path.splitext(os.path.basename(mhmat))[0]
-    m = parse_mhmat(mhmat)
+    m = human_assets.parse_mhmat(mhmat, ASSET_DIR)
     tex = copy_texture(m.get("diffuseTexture"), "skin_" + nm)
     if tex:
         skins.append({"name": nm, "albedo": tex, "normal": copy_texture(m.get("normalmapTexture"), "skin_" + nm + "_nrm")})
