@@ -193,7 +193,7 @@ template<class Match> bool assetSlot(render::Human& human, const char* text, con
     if(none) { names.push_back(""); entries.push_back("Keine"); }
     for(auto& a:human.catalog()["assets"]) {
         std::string name=a["name"];
-        if(matches(name)) { names.push_back(name); entries.push_back(assetLabel(name)); }
+        if(matches(name)) { names.push_back(name); entries.push_back(a.value("label",assetLabel(name))); }
     }
     if(names.empty() || (none && names.size()==1)) return false;
     // Alphabetical, so related styles ("Bob, ...") sit together; "Keine" stays first.
@@ -230,7 +230,33 @@ void CharacterCreator::open(render::Human& human) {
     original_=human.state;
     if(!human.state.value("enabled",false)) human.applyTemplate(render::Human::Template::Male);
     open_=true; dirty_=true; showClothes_=false; error_.clear(); tab_=0; filter_[0]=0;
-    human.state["enabled"]=true; orbit=180; distance=2.6f;
+    human.state["enabled"]=true; setView(View{}); dragging_=panning_=false;
+}
+void CharacterCreator::limitPitch(float maxPitch) {
+    target_.pitch=std::min(target_.pitch,maxPitch); view.pitch=std::min(view.pitch,maxPitch);
+}
+// Mouse over the free preview area: left drag turns and tilts, the wheel zooms, right drag moves the focus up and down,
+// a double click returns to the full body view. The view eases towards the target.
+void CharacterCreator::updateCamera() {
+    ImGuiIO& io=ImGui::GetIO();
+    bool overPreview=io.MousePos.x>previewLeft*io.DisplaySize.x && !ImGui::IsAnyItemHovered() && !ImGui::IsAnyItemActive();
+    if(overPreview && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) target_=View{};
+    if(overPreview && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) dragging_=true;
+    if(overPreview && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) panning_=true;
+    if(!ImGui::IsMouseDown(ImGuiMouseButton_Left)) dragging_=false;
+    if(!ImGui::IsMouseDown(ImGuiMouseButton_Right)) panning_=false;
+    if(dragging_) {
+        target_.orbit+=io.MouseDelta.x*0.4f;
+        target_.pitch=std::clamp(target_.pitch-io.MouseDelta.y*0.25f,-60.0f,35.0f);
+    }
+    // Panning moves the body by about as much as the mouse at the current zoom.
+    if(panning_) target_.lift=std::clamp(target_.lift+io.MouseDelta.y*target_.distance*0.0012f,-1.0f,1.0f);
+    if(overPreview && io.MouseWheel!=0) target_.distance=std::clamp(target_.distance*std::pow(0.87f,io.MouseWheel),0.45f,6.0f);
+    if(dragging_ || panning_) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    float k=1.0f-std::exp(-std::min(io.DeltaTime,0.1f)*12.0f);
+    view.orbit+=(target_.orbit-view.orbit)*k; view.pitch+=(target_.pitch-view.pitch)*k;
+    // Zoom eases in log space, so it feels the same close up and far away.
+    view.distance*=std::pow(target_.distance/view.distance,k); view.lift+=(target_.lift-view.lift)*k;
 }
 CharacterCreator::Action CharacterCreator::cancel(render::Human& human) {
     human.state=original_; open_=false; return Action::Cancel;
@@ -250,6 +276,8 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
     ImGui::Begin("##character-creator",nullptr,ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoBackground|
         ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoSavedSettings|ImGuiWindowFlags_NoScrollWithMouse|ImGuiWindowFlags_NoScrollbar);
     theme::backdrop(x+width+S(18));
+    previewLeft=std::min((x+width+S(18))/std::max(screen.x,1.0f),0.8f);
+    updateCamera();
     theme::heading(ImVec2(x,screen.y*0.065f),"Dein Charakter","Eine Vorlage wählen. Deinen eigenen Weg gestalten.");
     theme::columns(width);
     ImGui::BeginChild("##creator-fields",ImVec2(width+S(12),std::max(S(100),screen.y-ImGui::GetCursorScreenPos().y-S(270))),
@@ -288,9 +316,32 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
         slider("Alter","age",0.5f,0.5f,1.0f);
         slider("Muskelmasse","muscle",0.5f); slider("Gewicht","weight",0.5f);
         slider("Größe","height",0.5f); slider("Proportionen","proportions",0.5f);
+        if(!catalog.value("realism",nlohmann::json::array()).empty()) slider("Definition","definition",0.6f);
         if(state.value("gender",1.0f)<0.5f) {
             theme::section("BRUST");
             slider("Volumen","cupsize",0.44f); slider("Form","firmness",0.6f);
+        }
+        bool genitals=false;
+        for(auto& a:catalog["assets"]) genitals|=a["kind"]=="genitals";
+        if(genitals) {
+            theme::section("INTIMBEREICH");
+            if(assetSlot(human,"Genitalien","genitals",[](const std::string& n) { return n.rfind("genitals_",0)==0; },true)) dirty_=true;
+            static const std::map<std::string,std::string> names={{"length","Länge"},{"circ","Umfang"},{"testicles","Hoden"}};
+            for(auto& a:catalog["assets"]) {
+                if(a["kind"]!="genitals") continue;
+                bool chosen=false;
+                for(auto& s:state["assets"]) chosen|=s==a["name"];
+                if(!chosen) continue;
+                for(auto& s:a.value("sliders",nlohmann::json::array())) {
+                    std::string name=s.value("name",std::string()), key="genitals/"+name;
+                    auto it=names.find(name);
+                    float v=state["details"].value(key,0.0f), lo=s.contains("neg")?-1.0f:0.0f;
+                    if(theme::slider(it!=names.end()?it->second.c_str():label(name).c_str(),("##g-"+name).c_str(),&v,lo,1,"%.2f")) {
+                        state["details"][key]=v; dirty_=true;
+                    }
+                }
+            }
+            theme::muted("Sichtbar, wenn weder Kleidung noch Unterwäsche getragen wird.");
         }
         theme::section("HERKUNFT");
         slider("Afrikanisch","african",0); slider("Asiatisch","asian",0); slider("Europäisch","caucasian",1);
@@ -409,6 +460,8 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
     } else {
         theme::section("KLEIDUNG");
         if(theme::toggle("In Vorschau zeigen","##show-clothes",&showClothes_)) dirty_=true;
+        bool underwear=state.value("underwear",true);
+        if(theme::toggle("Unterwäsche","##underwear",&underwear)) { state["underwear"]=underwear; dirty_=true; }
         if(assetSlot(human,"Outfit","outfit",isOutfit,true)) dirty_=true;
         if(assetSlot(human,"Schuhe","shoes",isShoes,true)) dirty_=true;
         if(assetSlot(human,"Hut","hat",isHat,true)) dirty_=true;
@@ -420,8 +473,16 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
     ImGui::BeginChild("##creator-actions",ImVec2(width+S(12),S(238)),ImGuiChildFlags_None,
         ImGuiWindowFlags_NoBackground|ImGuiWindowFlags_NoScrollbar|ImGuiWindowFlags_NoScrollWithMouse);
     theme::section("VORSCHAU");
-    theme::slider("Drehen","##orbit",&orbit,0,360,"%.0f°");
-    theme::slider("Abstand","##distance",&distance,0.5f,6,"%.1f m");
+    struct Shot { const char* name; float distance, pitch; };
+    static const Shot shots[]={{"Ganzkörper",2.6f,-5},{"Oberkörper",1.15f,-4},{"Gesicht",0.75f,-2}};
+    for(int s=0;s<3;++s) {
+        if(s) ImGui::SameLine(0,S(4));
+        bool active=std::abs(std::log(target_.distance/shots[s].distance))<0.12f && std::abs(target_.lift)<0.02f;
+        if(theme::tab(shots[s].name,active)) {
+            target_.distance=shots[s].distance; target_.pitch=shots[s].pitch; target_.lift=0;
+        }
+    }
+    theme::muted("Ziehen: drehen  ·  Mausrad: zoomen  ·  Rechts ziehen: verschieben  ·  Doppelklick: zurück");
     theme::muted(showClothes_?"Mit Kleidung, so wie du im Spiel aussiehst.":"Ohne Kleidung, damit du jede Form gut erkennen kannst.");
     if(theme::action("Vorlage zurücksetzen",width*0.53f)) {
         human.applyTemplate(state.value("template",std::string("male"))=="female"?render::Human::Template::Female:render::Human::Template::Male); dirty_=true;

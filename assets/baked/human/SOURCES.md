@@ -23,3 +23,16 @@ Per-asset authors, sources and licences are listed in `assets/human/packs/*.json
 CC0 1.0 Universal: https://creativecommons.org/publicdomain/zero/1.0/
 
 CC-BY (as linked by the MakeHuman asset FAQ): https://creativecommons.org/licenses/by/2.5/se/deed.en
+
+## Genitals
+
+Baked by `tools/blender/bake_genitals.py` (see `tools/CHARACTER_CREATOR.md`). The sources are MakeHuman 1.1 community topologies, kept in `assets/human/genitals/`; only the part around the crotch is used. They were downloaded from the former MakeHuman asset repository through the Internet Archive (the repository itself is offline):
+
+| Asset | Author | Licence | Source |
+|---|---|---|---|
+| `genitals_adult_male_genitalia` ("Männlich (realistisch)") | MakeHuman team (Manuel Bastioni), re-uploaded by XSuprem3X | **AGPL-3.0** (file header; the upload page says CC0, which the uploader could not grant) | https://web.archive.org/web/2025/http://www.makehumancommunity.org/proxy/adult_male_genitalia.html_0 |
+| `genitals_adult_female_genitalia_remapped` ("Weiblich (realistisch)") | MakeHuman team (Manuel Bastioni), UV remap by MTKnife | **AGPL-3.0** (derived from the AGPL "Adult Female Genitalia"; the remap itself is marked CC0) | https://web.archive.org/web/2025/http://www.makehumancommunity.org/proxy/adult_female_genitalia_remapped.html |
+| `genitals_female_generic_with_simplified_genitals_fixed` ("Weiblich (vereinfacht)") | wolgade, fix by spamrakuen | CC0 | https://web.archive.org/web/2025/http://www.makehumancommunity.org/proxy/female_generic_with_simplified_genitals_fixed.html |
+| `genitals_male_mpfb` ("Männlich (MakeHuman)") | MakeHuman base mesh genital helper and penis targets | CC0 | MPFB system data |
+
+AGPL-3.0: https://www.gnu.org/licenses/agpl-3.0.html. The two AGPL assets are fine for private use. Before the game is distributed, either ship their sources (`assets/human/genitals/`) under the AGPL and check what that means for the rest of the game, or remove them from `human.json`; the CC0 assets remain.

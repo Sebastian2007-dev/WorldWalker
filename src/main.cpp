@@ -62,6 +62,9 @@ int main(int argc, char** argv) {
     float yaw = 0, pitch = 0, shotTime = 10.5f;
     bool creatorRequested = false;
     const char* creatorTemplate = nullptr;
+    float creatorDistance = -1.0f, creatorOrbit = -1.0f, creatorLift = 0.0f;
+    bool creatorNude = false;
+    std::vector<std::pair<std::string, float>> creatorSet;  // --creator-set key=value (numeric appearance values)
     bool thirdPerson = false, timeGiven = false, noShadows = false, noGrass = false, noTaa = false, noSsao = false;
     float clouds = -1.0f;
     int qualityArg = -1;
@@ -76,6 +79,14 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--creator-template") && i + 1 < argc) {
             creatorTemplate=argv[++i]; creatorRequested=true;
         }
+        else if (!std::strcmp(argv[i], "--creator-distance") && i + 1 < argc) creatorDistance = float(std::atof(argv[++i]));
+        else if (!std::strcmp(argv[i], "--creator-orbit") && i + 1 < argc) creatorOrbit = float(std::atof(argv[++i]));
+        else if (!std::strcmp(argv[i], "--creator-nude")) creatorNude = true;
+        else if (!std::strcmp(argv[i], "--creator-set") && i + 1 < argc) {
+            std::string kv = argv[++i];
+            if (auto eq = kv.find('='); eq != std::string::npos) creatorSet.push_back({kv.substr(0, eq), float(std::atof(kv.c_str() + eq + 1))});
+        }
+        else if (!std::strcmp(argv[i], "--creator-lift") && i + 1 < argc) creatorLift = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--lon") && i + 1 < argc) startLon = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--validation")) validation = true;
         else if (!std::strcmp(argv[i], "--noshadows")) noShadows = true;
@@ -217,6 +228,15 @@ int main(int argc, char** argv) {
                                                       : std::random_device{}());
         else human.applyTemplate(!std::strcmp(creatorTemplate,"female") ? render::Human::Template::Female : render::Human::Template::Male);
     }
+    if (creator.isOpen() && creatorNude) human.state["underwear"] = false;
+    if (creator.isOpen()) for (auto& [key, value] : creatorSet) human.state[key] = value;
+    if (creatorDistance > 0.0f || creatorOrbit >= 0.0f || creatorLift != 0.0f) {
+        ui::CharacterCreator::View view;
+        if (creatorDistance > 0.0f) view.distance = creatorDistance;
+        if (creatorOrbit >= 0.0f) view.orbit = creatorOrbit;
+        view.lift = creatorLift;
+        creator.setView(view);
+    }
     fs::path settingsFile = assetDir.parent_path() / "settings.json";
     if (!shotPath) {
         ui::loadSettings(settingsFile, settings, params, player);
@@ -274,8 +294,8 @@ int main(int argc, char** argv) {
         bool paused = menu.isOpen() || creator.isOpen();
         if (creator.isOpen()) {
             player.view = game::Player::View::ThirdPerson;
-            player.setLook(player.bodyHeading()*57.29578f + creator.orbit,-5.0f);
-            player.thirdPersonDistance = creator.distance;
+            player.setLook(player.bodyHeading()*57.29578f + creator.view.orbit, creator.view.pitch);
+            player.thirdPersonDistance = creator.view.distance;
         }
         if (!paused) {
             if (app.toggleView)
@@ -315,11 +335,21 @@ int main(int argc, char** argv) {
         // Paused: dt = 0 freezes movement but still lets the player settle onto freshly streamed ground.
         player.update(paused ? 0.0f : dt, in, data, veg);
         if (creator.isOpen()) {
-            // Zooming in moves the focus from the body's centre up to the face.
+            // Zooming in moves the focus from the body's centre up to the face; right drag adds an offset.
+            const auto& view = creator.view;
             float head = 1.6f;
             for (auto& bone : character.skeleton()) if (bone.name == "Head") head = bone.pos.z + 0.1f;
-            float face = std::clamp((2.4f - creator.distance) / 1.6f, 0.0f, 1.0f);
-            player.previewCamera(creator.distance, 1.0f + (head - 1.0f) * face, creator.distance * 0.5f);
+            float face = glm::smoothstep(2.4f, 0.7f, view.distance);
+            float focus = std::clamp(glm::mix(head * 0.56f, head, face) + view.lift, 0.15f, head + 0.15f);
+            // The camera stays above the ground: looking up is limited by how far below the focus it may go.
+            creator.limitPitch(glm::degrees(std::asin(std::clamp((focus - 0.12f) / view.distance, -1.0f, 1.0f))));
+            player.setLook(player.bodyHeading() * 57.29578f + view.orbit, view.pitch);
+            // Centre the character in the free area right of the panel: shift the focus sideways by that point's
+            // offset from the screen centre at the focus distance.
+            ImVec2 display = ImGui::GetIO().DisplaySize;
+            float aspect = display.y > 0 ? display.x / display.y : 16.0f / 9.0f;
+            float shift = creator.previewLeft * view.distance * std::tan(glm::radians(params.fovDeg) * 0.5f) * aspect;
+            player.previewCamera(view.distance, focus, shift);
         }
         render::AnimInput anim;
         anim.velocity = player.localVelocity();
@@ -396,6 +426,7 @@ int main(int argc, char** argv) {
         }
         finishCreator(creator.draw(human,character,characterFile));
         params.menuFade = creator.isOpen() ? 0.0f : menu.fade();
+        params.studio += ((creator.isOpen() ? 1.0f : 0.0f) - params.studio) * std::min(dt * 4.0f, 1.0f);
         ImGui::Render();
 
         if (shotPath) {

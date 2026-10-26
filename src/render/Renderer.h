@@ -39,6 +39,7 @@ struct SceneParams {
     float terrainDetail = 1.0f;     // terrain refinement distance factor
     float treeDetail = 1.0f;        // tree LOD distance factor
     float menuFade = 0.0f;      // 0..1, blurs and dims the scene behind the pause menu
+    float studio = 0.0f;        // 0..1, camera fixed studio lights on the character (creator preview)
 };
 
 // GPU time per stage of a frame in milliseconds, measured with timestamp queries (0 when unsupported).

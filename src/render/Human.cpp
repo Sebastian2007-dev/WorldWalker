@@ -71,6 +71,16 @@ bool Human::load(const std::filesystem::path& directory) {
             auto n=count(tf); array(tf,t.indices,n); array(tf,t.delta,n);
             for(auto i:t.indices) if(i>=base_.size()) throw std::runtime_error("Invalid morph vertex");
         }
+        realism_.clear();
+        if(std::ifstream rf(directory / "realism.bin",std::ios::binary); rf) {
+            realism_.resize(count(rf));
+            for(auto& t:realism_) {
+                auto n=count(rf); array(rf,t.indices,n); array(rf,t.delta,n);
+                for(auto i:t.indices) if(i>=base_.size()) throw std::runtime_error("Invalid realism vertex");
+            }
+        }
+        for(auto& r:meta_.value("realism",nlohmann::json::array()))
+            if(r.value("target",-1)<0 || size_t(r.value("target",-1))>=realism_.size()) throw std::runtime_error("Invalid realism entry");
         assets_.clear();
         for(auto& a:meta_["assets"]) {
             Asset asset; std::ifstream af(directory/a.at("file").get<std::string>(),std::ios::binary);
@@ -78,6 +88,14 @@ bool Human::load(const std::filesystem::path& directory) {
             uint8_t scaled; read(af,&scaled,1); asset.scaled=scaled!=0;
             for(int k=0;k<3;++k) { read(af,&asset.scaleA[k],1); read(af,&asset.scaleB[k],1); read(af,&asset.reference[k],1); }
             array(af,asset.deleted,count(af));
+            // Optional morphs (tools/blender/bake_genitals.py): name, then sparse offset deltas in metres.
+            if(af.peek()!=std::char_traits<char>::eof()) for(uint32_t m=count(af);m>0;--m) {
+                std::string name(count(af),'\0'); read(af,name.data(),name.size());
+                auto& t=asset.morphs[name]; auto n=count(af); array(af,t.indices,n); array(af,t.delta,n);
+                // "body:<x>" morphs move base vertices (applied while the asset is shown, see "bodyMorphs").
+                size_t limit=name.rfind("body:",0)==0?base_.size():asset.vertices.size();
+                for(auto i:t.indices) if(i>=limit) throw std::runtime_error("Invalid asset morph vertex");
+            }
             for(auto& v:asset.vertices) for(auto i:v.refs) if(i>=base_.size()) throw std::runtime_error("Invalid proxy vertex");
             for(auto i:asset.indices) if(i>=asset.vertices.size()) throw std::runtime_error("Invalid proxy triangle");
             for(auto i:asset.deleted) if(i>=base_.size()) throw std::runtime_error("Invalid hidden vertex");
@@ -91,8 +109,153 @@ bool Human::load(const std::filesystem::path& directory) {
             if(p < -1 || p>=int(b)) throw std::runtime_error("Invalid bone parent");
             for(auto key:{"head","tail"}) for(auto& i:bone.at(key)) if(i.get<size_t>()>=base_.size()) throw std::runtime_error("Invalid joint");
         }
-        reset(); return true;
+        subdivide(); bindSkinAssets(); reset(); return true;
     } catch(const std::exception& e) { std::fprintf(stderr,"Human: %s\n",e.what()); base_.clear(); return false; }
+}
+void Human::subdivide() {
+    // The bake fans every quad into two consecutive triangles (a,b,c),(a,c,d); join them back into quads.
+    std::vector<std::vector<uint32_t>> faces;
+    for(size_t i=0;i<triangles_.size();i+=3) {
+        const uint32_t* t=&triangles_[i];
+        if(i+5<triangles_.size() && t[3]==t[0] && t[4]==t[2]) { faces.push_back({t[0],t[1],t[2],t[5]}); i+=3; }
+        else faces.push_back({t[0],t[1],t[2]});
+    }
+    const uint32_t V=uint32_t(base_.size());
+    auto key=[](uint32_t a,uint32_t b) { return a<b?uint64_t(a)<<32|b:uint64_t(b)<<32|a; };
+    std::map<uint64_t,uint32_t> edgeIds;                     // base edge -> index
+    std::vector<std::pair<uint32_t,uint32_t>> edges;
+    std::vector<std::vector<uint32_t>> edgeFaces;
+    std::vector<std::vector<uint32_t>> vertexFaces(V), vertexEdges(V);
+    for(uint32_t f=0;f<faces.size();++f) for(size_t k=0;k<faces[f].size();++k) {
+        uint32_t a=render_[faces[f][k]].base, b=render_[faces[f][(k+1)%faces[f].size()]].base;
+        auto [it,added]=edgeIds.try_emplace(key(a,b),uint32_t(edges.size()));
+        if(added) { edges.push_back({a,b}); edgeFaces.emplace_back(); vertexEdges[a].push_back(it->second); vertexEdges[b].push_back(it->second); }
+        edgeFaces[it->second].push_back(f);
+        vertexFaces[a].push_back(f);
+    }
+    const uint32_t E=uint32_t(edges.size());
+    facePoints_=V+E;
+    // Stencils as weights over base vertices.
+    using Weights=std::map<uint32_t,float>;
+    auto addFace=[&](Weights& w,uint32_t f,float s) { for(auto r:faces[f]) w[render_[r].base]+=s/float(faces[f].size()); };
+    stencilStart_.assign(1,0); stencil_.clear();
+    auto emit=[&](const Weights& w) { for(auto& [i,x]:w) stencil_.push_back({i,x}); stencilStart_.push_back(uint32_t(stencil_.size())); };
+    for(uint32_t v=0;v<V;++v) {
+        Weights w;
+        std::vector<uint32_t> border;
+        for(auto e:vertexEdges[v]) if(edgeFaces[e].size()!=2) border.push_back(edges[e].first==v?edges[e].second:edges[e].first);
+        float n=float(vertexEdges[v].size());
+        if(vertexFaces[v].empty() || (!border.empty() && border.size()!=2)) w[v]=1;  // loose helper or corner
+        else if(border.size()==2) { w[v]=0.75f; w[border[0]]+=0.125f; w[border[1]]+=0.125f; }
+        else {
+            // (F + 2R + (n-3)P) / n with F the mean face point and R the mean edge midpoint.
+            for(auto f:vertexFaces[v]) addFace(w,f,1.0f/(n*float(vertexFaces[v].size())));
+            for(auto e:vertexEdges[v]) { w[edges[e].first]+=1.0f/(n*n); w[edges[e].second]+=1.0f/(n*n); }
+            w[v]+=(n-3)/n;
+        }
+        emit(w);
+    }
+    for(uint32_t e=0;e<E;++e) {
+        Weights w;
+        if(edgeFaces[e].size()==2) {
+            w[edges[e].first]+=0.25f; w[edges[e].second]+=0.25f;
+            addFace(w,edgeFaces[e][0],0.25f); addFace(w,edgeFaces[e][1],0.25f);
+        } else { w[edges[e].first]=0.5f; w[edges[e].second]=0.5f; }
+        emit(w);
+    }
+    for(uint32_t f=0;f<faces.size();++f) { Weights w; addFace(w,f,1); emit(w); }
+    // Skin weights of the new points: mean of the stencil's source vertices, strongest four kept.
+    for(uint32_t v=V;v<stencilStart_.size()-1;++v) {
+        std::map<uint32_t,float> influences;
+        for(uint32_t s=stencilStart_[v];s<stencilStart_[v+1];++s) {
+            auto [i,x]=stencil_[s]; x=std::abs(x);
+            for(int j=0;j<4;++j) influences[(joints_[i]>>(j*8))&255]+=x*float((weights_[i]>>(j*8))&255);
+        }
+        std::vector<std::pair<float,uint32_t>> sorted;
+        for(auto [joint,w]:influences) if(w>0) sorted.push_back({w,joint});
+        std::sort(sorted.rbegin(),sorted.rend()); if(sorted.size()>4) sorted.resize(4);
+        float sum=0; for(auto [w,j]:sorted) sum+=w;
+        uint32_t js=0,ws=0; int remaining=255;
+        for(size_t k=0;k<sorted.size();++k) {
+            int w=k+1==sorted.size()?remaining:std::clamp(int(std::round(sorted[k].first/std::max(sum,1e-5f)*255)),0,remaining);
+            remaining-=w; js|=sorted[k].second<<(k*8); ws|=uint32_t(w)<<(k*8);
+        }
+        joints_.push_back(js); weights_.push_back(ws);
+    }
+    // Render vertices: corners keep theirs, UV seams split edge points; UVs are interpolated linearly.
+    std::vector<RenderVertex> render=render_;
+    std::map<uint64_t,uint32_t> renderEdges;
+    auto edgePoint=[&](uint32_t a,uint32_t b) {
+        auto [it,added]=renderEdges.try_emplace(key(a,b),uint32_t(render.size()));
+        if(added) render.push_back({V+edgeIds.at(key(render_[a].base,render_[b].base)),(render_[a].uv+render_[b].uv)*0.5f});
+        return it->second;
+    };
+    std::vector<uint32_t> triangles;
+    for(uint32_t f=0;f<faces.size();++f) {
+        auto& c=faces[f]; size_t n=c.size();
+        glm::vec2 uv(0); for(auto r:c) uv+=render_[r].uv/float(n);
+        uint32_t center=uint32_t(render.size()); render.push_back({facePoints_+f,uv});
+        for(size_t k=0;k<n;++k) {
+            uint32_t next=edgePoint(c[k],c[(k+1)%n]), prev=edgePoint(c[(k+n-1)%n],c[k]);
+            triangles.insert(triangles.end(),{c[k],next,center, c[k],center,prev});
+        }
+    }
+    render_=std::move(render); triangles_=std::move(triangles);
+    std::vector<std::set<uint32_t>> adjacent(stencilStart_.size()-1);
+    for(size_t i=0;i<triangles_.size();i+=3) for(int k=0;k<3;++k) {
+        uint32_t a=render_[triangles_[i+k]].base, b=render_[triangles_[i+(k+1)%3]].base;
+        adjacent[a].insert(b); adjacent[b].insert(a);
+    }
+    neighborStart_.assign(1,0); neighbors_.clear();
+    for(auto& s:adjacent) { neighbors_.insert(neighbors_.end(),s.begin(),s.end()); neighborStart_.push_back(uint32_t(neighbors_.size())); }
+}
+void Human::bindSkinAssets() {
+    // Rest pose of the smoothed body and the triangles around each of its vertices.
+    std::vector<glm::vec3> rest(stencilStart_.size()-1,glm::vec3(0));
+    for(size_t v=0;v<rest.size();++v) for(uint32_t s=stencilStart_[v];s<stencilStart_[v+1];++s) rest[v]+=base_[stencil_[s].first]*stencil_[s].second;
+    std::vector<std::vector<uint32_t>> around;
+    auto closest=[](glm::vec3 p,glm::vec3 a,glm::vec3 b,glm::vec3 c) {
+        // Barycentric weights of the point of triangle abc closest to p (Ericson, Real-Time Collision Detection 5.1.5).
+        glm::vec3 ab=b-a, ac=c-a, ap=p-a;
+        float d1=glm::dot(ab,ap), d2=glm::dot(ac,ap);
+        if(d1<=0 && d2<=0) return glm::vec3(1,0,0);
+        glm::vec3 bp=p-b; float d3=glm::dot(ab,bp), d4=glm::dot(ac,bp);
+        if(d3>=0 && d4<=d3) return glm::vec3(0,1,0);
+        float vc=d1*d4-d3*d2;
+        if(vc<=0 && d1>=0 && d3<=0) { float v=d1/(d1-d3); return glm::vec3(1-v,v,0); }
+        glm::vec3 cp=p-c; float d5=glm::dot(ab,cp), d6=glm::dot(ac,cp);
+        if(d6>=0 && d5<=d6) return glm::vec3(0,0,1);
+        float vb=d5*d2-d1*d6;
+        if(vb<=0 && d2>=0 && d6<=0) { float w=d2/(d2-d6); return glm::vec3(1-w,0,w); }
+        float va=d3*d6-d5*d4;
+        if(va<=0 && d4-d3>=0 && d5-d6>=0) { float w=(d4-d3)/((d4-d3)+(d5-d6)); return glm::vec3(0,1-w,w); }
+        float s=1/(va+vb+vc); return glm::vec3(1-(vb+vc)*s,vb*s,vc*s);
+    };
+    for(size_t a=0;a<assets_.size();++a) {
+        if(!meta_["assets"][a].value("skin",false)) continue;
+        if(around.empty()) {
+            around.resize(rest.size());
+            for(uint32_t t=0;t<triangles_.size();t+=3) for(int k=0;k<3;++k) around[render_[triangles_[t+k]].base].push_back(t);
+        }
+        // The point of the coarse body each vertex hangs from moves to the nearest point of the smoothed body; the
+        // offset from there stays, so the shape is kept and vertices on the skin stay on it.
+        for(auto& v:assets_[a].vertices) {
+            glm::vec3 p(0); for(int k=0;k<3;++k) p+=base_[v.refs[k]]*v.weights[k];
+            std::set<uint32_t> near(std::begin(v.refs),std::end(v.refs));
+            for(int ring=0;ring<2;++ring) {
+                std::set<uint32_t> grown=near;
+                for(auto n:near) grown.insert(neighbors_.begin()+neighborStart_[n],neighbors_.begin()+neighborStart_[n+1]);
+                near=std::move(grown);
+            }
+            float best=std::numeric_limits<float>::max();
+            for(auto n:near) for(auto t:around[n]) {
+                uint32_t i[3]; for(int k=0;k<3;++k) i[k]=render_[triangles_[t+k]].base;
+                glm::vec3 w=closest(p,rest[i[0]],rest[i[1]],rest[i[2]]);
+                float d=glm::distance(p,rest[i[0]]*w.x+rest[i[1]]*w.y+rest[i[2]]*w.z);
+                if(d<best) { best=d; for(int k=0;k<3;++k) { v.refs[k]=i[k]; v.weights[k]=w[k]; } }
+            }
+        }
+    }
 }
 void Human::reset() {
     applyTemplate(Template::Male);
@@ -103,7 +266,8 @@ void Human::applyTemplate(Template body) {
            {"gender",female?0.0f:1.0f},{"age",0.5f},{"muscle",female?0.42f:0.62f},{"weight",female?0.46f:0.49f},
            {"height",female?0.48f:0.56f},{"proportions",0.65f},{"cupsize",0.44f},{"firmness",0.6f},
            {"african",0.0f},{"asian",0.0f},{"caucasian",1.0f},{"details",nlohmann::json::object()},
-           {"assets",nlohmann::json::array()},{"skin",0},{"eyes",0},{"skinTone",0.5f},{"skinWarmth",0.5f},{"hairVolume",0.45f}};
+           {"assets",nlohmann::json::array()},{"skin",0},{"eyes",0},{"skinTone",0.5f},{"skinWarmth",0.5f},{"hairVolume",0.45f},
+           {"underwear",true},{"definition",0.6f}};
     // The bob's texture is a pale ash blond; a warm brown reads better as the starting look.
     if(female) { auto& c=hairShades()[2].rgb; state["hairColor"]={c[0],c[1],c[2]}; }
     std::map<std::string,bool> selected;
@@ -114,6 +278,8 @@ void Human::applyTemplate(Template body) {
         bool use=kind!="clothes" && kind!="hair" && !selected[kind];
         if(kind=="hair") use=name==(female?"hair_bob02":"hair_short01");
         if(kind=="clothes") use=name==(female?"clothes_female_casualsuit01":"clothes_male_casualsuit01") || name=="clothes_shoes01";
+        // Genitals: the first asset made for this sex (bake_genitals.py), none if there is no such asset.
+        if(kind=="genitals") use=!selected[kind] && a.value("sex",std::string())==(female?"female":"male");
         if(use) { state["assets"].push_back(name); selected[kind]=true; }
     }
 }
@@ -132,6 +298,7 @@ void Human::randomize(uint32_t seed) {
     size_t main=pick(3), blend=pick(3); float share=uniform(0.0f,0.4f);
     for(size_t r=0;r<3;++r) state[races[r]]=(r==main?1.0f-share:0.0f)+(r==blend?share:0.0f);
     state["skinTone"]=uniform(0.4f,0.6f); state["skinWarmth"]=uniform(0.4f,0.6f); state["hairVolume"]=uniform(0.3f,0.65f);
+    state["definition"]=uniform(0.3f,0.8f);
     // Subtle facial variation: large detail values quickly look deformed. Eye morphs are left out because they
     // easily push the eyeball through the lids.
     static const std::set<std::string> face={"head","forehead","eyebrows","nose","mouth","cheek","chin","ears"};
@@ -198,13 +365,13 @@ bool Human::loadPreset(const std::filesystem::path& file) {
         if(!j.value("details",nlohmann::json::object()).is_object() || !j.value("assets",nlohmann::json::array()).is_array()) return false;
         for(auto& a:j.value("assets",nlohmann::json::array())) if(!a.is_string()) return false;
         for(auto key:{"skin","eyes"}) if(j.contains(key) && !j[key].is_number_integer()) return false;
-        if(j.contains("enabled") && !j["enabled"].is_boolean()) return false;
+        for(auto key:{"enabled","underwear"}) if(j.contains(key) && !j[key].is_boolean()) return false;
         if(j.contains("template") && (!j["template"].is_string() || (j["template"]!="male" && j["template"]!="female"))) return false;
         if(j.contains("hairColor") && !j["hairColor"].is_null() && !validColor(j["hairColor"])) return false;
         auto next=state;
         next.merge_patch(j);
         for(auto key:{"gender","age","muscle","weight","height","proportions","cupsize","firmness","african","asian","caucasian",
-                      "skinTone","skinWarmth","hairVolume"})
+                      "skinTone","skinWarmth","hairVolume","definition"})
             next[key]=value(next,key,value(state,key,0.5f));
         // A preset without a hair colour keeps the hair texture's own colour.
         if(!j.contains("hairColor") || j["hairColor"].is_null()) next.erase("hairColor");
@@ -230,7 +397,26 @@ bool Human::savePreset(const std::filesystem::path& file) const {
 bool Human::rebuild(Character& character, bool hideClothes) {
     if(!ready()) return false;
     try {
+        std::vector<bool> active(assets_.size());
+        bool outfit=false;
+        for(size_t a=0;a<assets_.size();++a) {
+            std::string name=meta_["assets"][a]["name"];
+            for(auto& selected:state["assets"]) if(selected==name) active[a]=true;
+            if(hideClothes && meta_["assets"][a]["kind"]=="clothes") active[a]=false;
+            if(active[a] && name.rfind("clothes_",0)==0 && name.rfind("clothes_shoes",0)!=0 && name.rfind("clothes_fedora",0)!=0) outfit=true;
+        }
+        // Underwear covers the body while no outfit is worn; genitals show only when neither covers them (they
+        // would poke through either).
+        const bool underwear=!outfit && state.value("underwear",true);
+        for(size_t a=0;a<assets_.size();++a) if(meta_["assets"][a]["kind"]=="genitals" && (outfit || underwear)) active[a]=false;
         auto positions=base_;
+        // Body morphs that come with a shown asset (genitals flatten the male body's moulded bulge).
+        for(size_t a=0;a<assets_.size();++a) if(active[a])
+            for(auto& [name,w]:meta_["assets"][a].value("bodyMorphs",nlohmann::json::object()).items()) {
+                auto morph=assets_[a].morphs.find(name);
+                if(morph==assets_[a].morphs.end() || !w.is_number()) continue;
+                for(size_t i=0;i<morph->second.indices.size();++i) positions[morph->second.indices[i]]+=morph->second.delta[i]*w.get<float>();
+            }
         auto apply=[&](int index,float weight) {
             if(index<0 || size_t(index)>=targets_.size() || weight==0) return;
             auto& t=targets_[size_t(index)];
@@ -277,6 +463,18 @@ bool Human::rebuild(Character& character, bool hideClothes) {
             v=std::clamp(v,s["neg"].get<int>()<0?0.0f:-1.0f,1.0f);
             apply(s[v<0?"neg":"pos"].get<int>(),std::abs(v));
         }
+        // Sculpted anatomy (bake_realism.py), blended by sex.
+        const float gender=value(state,"gender",0.5f), definition=value(state,"definition",0.6f);
+        for(auto& r:meta_.value("realism",nlohmann::json::array())) {
+            float w=definition*(r.value("sex",std::string())=="male"?gender:1.0f-gender);
+            auto& t=realism_[size_t(r["target"].get<int>())];
+            if(w>0) for(size_t i=0;i<t.indices.size();++i) positions[t.indices[i]]+=t.delta[i]*w;
+        }
+        // Smooth body: one Catmull-Clark step. Base vertices keep their index, so bones and fitted assets follow.
+        std::vector<glm::vec3> smooth(stencilStart_.size()-1,glm::vec3(0));
+        for(size_t v=0;v<smooth.size();++v)
+            for(uint32_t s=stencilStart_[v];s<stencilStart_[v+1];++s) smooth[v]+=positions[stencil_[s].first]*stencil_[s].second;
+        positions=std::move(smooth);
         float ground=1e10f;
         for(auto& r:render_) ground=std::min(ground,positions[r.base].z);
         for(auto& p:positions) p.z-=ground;
@@ -288,13 +486,11 @@ bool Human::rebuild(Character& character, bool hideClothes) {
             if(glm::length(oldDir)>1e-5f && glm::length(newDir)>1e-5f) rot=glm::rotation(glm::normalize(oldDir),glm::normalize(newDir))*rot;
             bones.push_back({b["name"],b["parent"],glm::normalize(rot),mean(b["head"])});
         }
-        std::vector<bool> active(assets_.size()), hidden(base_.size(),false);
-        for(size_t a=0;a<assets_.size();++a) {
-            auto name=meta_["assets"][a]["name"];
-            for(auto& selected:state["assets"]) if(selected==name) active[a]=true;
-            if(hideClothes && meta_["assets"][a]["kind"]=="clothes") active[a]=false;
-            if(active[a]) for(auto i:assets_[a].deleted) hidden[i]=true;
-        }
+        std::vector<bool> hidden(positions.size(),false);
+        for(size_t a=0;a<assets_.size();++a) if(active[a]) for(auto i:assets_[a].deleted) hidden[i]=true;
+        // A face point stands for its face: hidden when any corner is, which hides all of the face's children.
+        for(uint32_t v=facePoints_;v<positions.size();++v)
+            for(uint32_t s=stencilStart_[v];s<stencilStart_[v+1];++s) if(hidden[stencil_[s].first]) hidden[v]=true;
         std::vector<SkinVertex> vertices;
         std::vector<uint32_t> indices;
         std::vector<MeshPart> parts;
@@ -318,8 +514,18 @@ bool Human::rebuild(Character& character, bool hideClothes) {
             bool hide=false; for(int k=0;k<3;++k) hide|=hidden[render_[triangles_[i+k]].base];
             if(!hide) indices.insert(indices.end(),triangles_.begin()+i,triangles_.begin()+i+3);
         }
-        MeshPart body{0,uint32_t(indices.size()),texture(skin,"albedo",true),texture(skin,"normal",false),false};
-        body.shading=MeshPart::Shading::Skin; body.tint=skinTint; parts.push_back(body);
+        // Without a normal map of its own the skin takes the sculpt's detail of the dominant sex.
+        nlohmann::json relief=skin;
+        if(!relief.contains("normal") || !relief["normal"].is_string()) for(auto& r:meta_.value("realism",nlohmann::json::array()))
+            if((r.value("sex",std::string())=="male")==(gender>=0.5f)) relief["normal"]=r["normal"];
+        MeshPart body{0,uint32_t(indices.size()),texture(skin,"albedo",true),texture(relief,"normal",false),false};
+        body.shading=MeshPart::Shading::Skin; body.tint=skinTint;
+        // The sculpt's detail fits the sculpt's shape: it fades in together with that shape ("definition").
+        if(relief!=skin) body.normalScale=definition;
+        parts.push_back(body);
+        // Vertices of skin assets with the body vertices they follow, to take over the body's crease shading.
+        struct OnSkin { uint32_t vertex; const ProxyVertex* proxy; float height; };  // height above the skin, metres
+        std::vector<OnSkin> onSkin;
         for(size_t a=0;a<assets_.size();++a) if(active[a]) {
             auto& asset=assets_[a]; auto material=meta_["assets"][a];
             if(material["kind"]=="eyes" && !meta_["eyeMaterials"].empty()) material["albedo"]=meta_["eyeMaterials"][std::clamp(state.value("eyes",0),0,int(meta_["eyeMaterials"].size())-1)]["albedo"];
@@ -327,12 +533,32 @@ bool Human::rebuild(Character& character, bool hideClothes) {
             if(asset.scaled) for(int k=0;k<3;++k) scale[k]=std::abs(positions[asset.scaleA[k]][k]-positions[asset.scaleB[k]][k])/asset.reference[k];
             // Hair volume: the offsets hold the hair's distance from the scalp, so scaling them flattens or fluffs it.
             if(material["kind"]=="hair") scale*=0.8f+0.45f*value(state,"hairVolume",0.45f);
+            // Asset morphs (genitals): two-sided sliders in "details" under "<kind>/<slider>".
+            std::vector<glm::vec3> morphed(asset.vertices.size(),glm::vec3(0));
+            for(auto& s:material.value("sliders",nlohmann::json::array())) {
+                auto& details=state["details"]; std::string key=material["kind"].get<std::string>()+"/"+s.value("name",std::string());
+                float w=details.contains(key)&&details[key].is_number()?std::clamp(details[key].get<float>(),-1.0f,1.0f):0.0f;
+                auto morph=asset.morphs.find(s.value(w<0?"neg":"pos",std::string()));
+                if(!std::isfinite(w) || w==0 || morph==asset.morphs.end()) continue;
+                for(size_t i=0;i<morph->second.indices.size();++i) morphed[morph->second.indices[i]]+=morph->second.delta[i]*std::abs(w);
+            }
+            // Assets bound to one bone ("bone") move with it rigidly instead of blending the body's weights.
+            int rigid=-1;
+            if(material.contains("bone")) for(size_t b=0;b<bones.size();++b) if(bones[b].name==material.value("bone",std::string())) rigid=int(b);
             uint32_t offset=uint32_t(vertices.size()), first=uint32_t(indices.size());
-            for(auto& v:asset.vertices) {
-                glm::vec3 p=v.offset*scale; std::map<uint32_t,float> influences;
+            for(size_t vi=0;vi<asset.vertices.size();++vi) {
+                auto& v=asset.vertices[vi];
+                glm::vec3 p=(v.offset+morphed[vi])*scale; std::map<uint32_t,float> influences;
                 for(int k=0;k<3;++k) {
                     p+=positions[v.refs[k]]*v.weights[k];
                     for(int j=0;j<4;++j) influences[(joints_[v.refs[k]]>>(j*8))&255]+=v.weights[k]*float((weights_[v.refs[k]]>>(j*8))&255);
+                }
+                // Rigid assets bend with the body where they lie on the skin and follow their bone where they stand
+                // out, so their edge stays on the skin in any pose.
+                if(rigid>=0) {
+                    float t=glm::smoothstep(0.002f,0.01f,glm::length((v.offset+morphed[vi])*scale));
+                    for(auto& [joint,w]:influences) w*=1-t;
+                    influences[uint32_t(rigid)]+=255*t;
                 }
                 std::vector<std::pair<float,uint32_t>> sorted;
                 for(auto [joint,w]:influences) sorted.push_back({w,joint});
@@ -346,10 +572,18 @@ bool Human::rebuild(Character& character, bool hideClothes) {
                 vertices.push_back({p,glm::vec3(0),v.uv,js,ws});
             }
             for(auto i:asset.indices) indices.push_back(offset+i);
-            MeshPart part{first,uint32_t(indices.size())-first,texture(material,"albedo",true),texture(material,"normal",false),
+            // Skin assets ("skin") sample the body's skin texture at the UVs of the body underneath, so they blend in.
+            const bool skinned=material.value("skin",false);
+            const auto& look=skinned?skin:material;
+            MeshPart part{first,uint32_t(indices.size())-first,texture(look,"albedo",true),texture(skinned?relief:look,"normal",false),
                           material.value("alphaTest",false)};
             std::string kind=material["kind"];
             part.shading=kind=="hair"?MeshPart::Shading::Hair:kind=="eyes"?MeshPart::Shading::Eyes:MeshPart::Shading::Cloth;
+            if(skinned) {
+                part.shading=MeshPart::Shading::Skin; part.tint=skinTint; part.normalScale=body.normalScale;
+                for(size_t vi=0;vi<asset.vertices.size();++vi)
+                    onSkin.push_back({offset+uint32_t(vi),&asset.vertices[vi],glm::length((asset.vertices[vi].offset+morphed[vi])*scale)});
+            }
             // The eye mesh includes MakeHuman's cornea shell, mapped to a texel with zero alpha; drawn opaque it
             // covers the iris with one flat colour. The eye shader adds the cornea's wet highlight instead.
             if(kind=="eyes") part.alphaTest=true;
@@ -361,15 +595,118 @@ bool Human::rebuild(Character& character, bool hideClothes) {
             parts.push_back(part);
         }
         // Accumulate body normals by base vertex so UV seams remain smooth.
-        std::vector<glm::vec3> normals(base_.size(),glm::vec3(0));
+        // Hidden faces count too: skin assets take the normals of the body under them.
+        std::vector<glm::vec3> normals(positions.size(),glm::vec3(0));
+        for(size_t i=0;i<triangles_.size();i+=3) {
+            uint32_t a=render_[triangles_[i]].base,b=render_[triangles_[i+1]].base,c=render_[triangles_[i+2]].base;
+            auto n=glm::cross(positions[b]-positions[a],positions[c]-positions[a]);
+            for(auto v:{a,b,c}) normals[v]+=n;
+        }
         for(size_t i=0;i<indices.size();i+=3) {
             auto a=indices[i],b=indices[i+1],c=indices[i+2];
+            if(a<render_.size()) continue;
             auto n=glm::cross(vertices[b].pos-vertices[a].pos,vertices[c].pos-vertices[a].pos);
-            for(auto v:{a,b,c}) { vertices[v].normal+=n; if(v<render_.size()) normals[render_[v].base]+=n; }
+            for(auto v:{a,b,c}) vertices[v].normal+=n;
+        }
+        for(auto& n:normals) n=glm::length(n)>1e-12f?glm::normalize(n):glm::vec3(0,0,1);
+        // Creases (eyelids, nostrils, armpits, between fingers) catch less light: concave curvature of the smoothed
+        // body, blurred over a few rings. Stored as the body normal's length (1 = open), see skinned.vert.
+        std::vector<float> crease(positions.size(),0), blurred(positions.size());
+        for(size_t v=0;v<positions.size();++v) {
+            uint32_t n=neighborStart_[v+1]-neighborStart_[v]; if(!n) continue;
+            glm::vec3 mean(0); float len=0;
+            for(uint32_t k=neighborStart_[v];k<neighborStart_[v+1];++k) {
+                mean+=positions[neighbors_[k]]; len+=glm::distance(positions[neighbors_[k]],positions[v]);
+            }
+            mean/=float(n); len/=float(n);
+            if(len>1e-6f) crease[v]=glm::dot(normals[v],mean-positions[v])/(len*len);  // ~ concave curvature, 1/m
+        }
+        for(int pass=0;pass<3;++pass) {
+            for(size_t v=0;v<positions.size();++v) {
+                float sum=crease[v]; uint32_t n=neighborStart_[v+1]-neighborStart_[v];
+                for(uint32_t k=neighborStart_[v];k<neighborStart_[v+1];++k) sum+=crease[neighbors_[k]];
+                blurred[v]=sum/float(n+1);
+            }
+            std::swap(crease,blurred);
         }
         for(size_t i=0;i<vertices.size();++i) {
-            auto& n=vertices[i].normal; if(i<render_.size()) n=normals[render_[i].base];
-            n=glm::length(n)>1e-8f?glm::normalize(n):glm::vec3(0,0,1);
+            auto& n=vertices[i].normal;
+            if(i<render_.size()) n=normals[render_[i].base]*(1.0f-std::clamp((crease[render_[i].base]-4.0f)/50.0f,0.0f,0.6f));
+            else n=glm::length(n)>1e-8f?glm::normalize(n):glm::vec3(0,0,1);
+        }
+        // Skin assets shade like the body under them; where they lie on it they take its normal, so no edge shows.
+        for(auto [i,v,height]:onSkin) {
+            float c=0; glm::vec3 n(0);
+            for(int k=0;k<3;++k) { c+=crease[v->refs[k]]*v->weights[k]; n+=normals[v->refs[k]]*v->weights[k]; }
+            float lifted=glm::smoothstep(0.001f,0.005f,height);
+            n=glm::mix(n,vertices[i].normal,lifted);
+            vertices[i].normal=(glm::length(n)>1e-8f?glm::normalize(n):glm::vec3(0,0,1))*(1.0f-std::clamp((c-4.0f)/50.0f,0.0f,0.6f));
+        }
+        // Plain underwear while no outfit is worn (unless switched off): a shell a few millimetres above the body, cut by a signed
+        // distance (metres, carried in uv.x) to its edges in the rest pose. The distance falls off with the vertex's
+        // weight on the trunk and thighs, so hands resting at the hips stay bare and the cut along the arms stays clean.
+        if(underwear) {
+            auto bone=[&](const char* name) { for(auto& b:bones) if(b.name==name) return b.pos; return glm::vec3(0); };
+            auto group=[&](std::initializer_list<const char*> names) {
+                std::vector<bool> in(256,false);
+                for(auto name:names) for(size_t b=0;b<bones.size();++b) if(bones[b].name==name) in[b]=true;
+                return in;
+            };
+            auto weight=[&](uint32_t v,const std::vector<bool>& in) {
+                float w=0;
+                for(int j=0;j<4;++j) if(in[(joints_[v]>>(j*8))&255]) w+=float((weights_[v]>>(j*8))&255)/255.0f;
+                return w;
+            };
+            const auto pelvis=group({"Hips","Spine","LeftUpLeg","RightUpLeg"}), torso=group({"Spine","Spine1","Spine2"});
+            glm::vec3 hips=bone("Hips"), leg=bone("LeftUpLeg"), chest=bone("Spine2");
+            float legX=std::abs(leg.x-hips.x), crotch=leg.z-0.9f*legX, top=hips.z+0.05f;
+            const bool bra=value(state,"gender",0.5f)<0.5f;
+            std::vector<float> mask(positions.size(),-1);
+            for(size_t v=0;v<positions.size();++v) {
+                glm::vec3 p=positions[v]; float side=std::abs(p.x-hips.x);
+                float trunk=weight(uint32_t(v),pelvis);
+                mask[v]=std::min(top-p.z,p.z-(crotch+std::max(side-0.25f*legX,0.0f)*0.95f))-std::max(0.6f-trunk,0.0f)*0.2f;
+                if(bra) {
+                    float chestWeight=weight(uint32_t(v),torso);
+                    mask[v]=std::max(mask[v],std::min(chest.z+0.04f-p.z,p.z-(chest.z-0.09f))-std::max(0.75f-chestWeight,0.0f)*0.3f);
+                }
+            }
+            // Fabric is taut: inside the garment the shell follows a Laplacian-smoothed body, so it spans the cleavage
+            // and does not trace every bump. Towards the edges it returns to the body, lifted only over hollows.
+            // Skin fully covered by fabric is dropped, so it cannot poke through the smoothed shell.
+            std::vector<glm::vec3> smoothed=positions, next(positions.size());
+            for(int pass=0;pass<16;++pass) {
+                for(size_t v=0;v<positions.size();++v) {
+                    uint32_t n=neighborStart_[v+1]-neighborStart_[v];
+                    if(!n || mask[v]<-0.03f) { next[v]=smoothed[v]; continue; }
+                    glm::vec3 mean(0);
+                    for(uint32_t k=neighborStart_[v];k<neighborStart_[v+1];++k) mean+=smoothed[neighbors_[k]];
+                    next[v]=glm::mix(smoothed[v],mean/float(n),0.6f);
+                }
+                std::swap(smoothed,next);
+            }
+            uint32_t first=uint32_t(indices.size());
+            std::map<uint32_t,uint32_t> shell;
+            for(uint32_t i=0;i<body.indexCount;i+=3) {
+                const uint32_t t[3]={indices[i],indices[i+1],indices[i+2]};
+                float lo=std::min({mask[render_[t[0]].base],mask[render_[t[1]].base],mask[render_[t[2]].base]});
+                float hi=std::max({mask[render_[t[0]].base],mask[render_[t[1]].base],mask[render_[t[2]].base]});
+                if(hi<=0) continue;
+                for(int k=0;k<3;++k) {
+                    auto [it,added]=shell.try_emplace(t[k],uint32_t(vertices.size()));
+                    if(added) {
+                        uint32_t b=render_[t[k]].base;
+                        float lift=std::max(glm::dot(smoothed[b]-positions[b],normals[b]),0.0f);
+                        glm::vec3 hug=positions[b]+normals[b]*lift;
+                        glm::vec3 p=glm::mix(hug,smoothed[b],glm::smoothstep(0.02f,0.05f,mask[b]))+normals[b]*0.003f;
+                        vertices.push_back({p,normals[b],glm::vec2(mask[b],0),joints_[b],weights_[b]});
+                    }
+                    indices.push_back(it->second);
+                }
+                if(lo>0.006f) indices[i+1]=indices[i+2]=indices[i];  // covered skin: degenerate, nothing rasterised
+            }
+            MeshPart part{first,uint32_t(indices.size())-first,texture(nlohmann::json::object(),"albedo",true),texture(nlohmann::json::object(),"normal",false),false};
+            part.shading=MeshPart::Shading::Underwear; part.tint=glm::vec3(0.045f,0.047f,0.052f); parts.push_back(part);
         }
         for(auto& v:vertices) {
             if(!std::isfinite(v.pos.x) || !std::isfinite(v.pos.y) || !std::isfinite(v.pos.z) || glm::length(v.pos)>10.0f)

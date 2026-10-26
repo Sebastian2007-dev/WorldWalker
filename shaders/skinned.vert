@@ -5,6 +5,7 @@
 layout(location = 0) out vec3 vRel;
 layout(location = 1) out vec3 vNormal;
 layout(location = 2) out vec2 vUv;
+layout(location = 3) out float vOcclusion;  // body: crease occlusion, stored as the normal's length (render/Human)
 
 void main() {
     SkinVertex v = pc.vertices.d[gl_VertexIndex];
@@ -15,5 +16,6 @@ void main() {
     vRel = p.xyz;
     vNormal = mat3(pc.model) * (mat3(skin) * v.normal);
     vUv = v.uv;
+    vOcclusion = min(length(v.normal), 1.0);
     gl_Position = pc.frame.viewProj * p;
 }

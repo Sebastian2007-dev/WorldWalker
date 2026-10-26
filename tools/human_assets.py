@@ -247,8 +247,10 @@ def main(asset_dir, out):
         if pack.get("source"):
             a["source"] = pack["source"]
     write_credits(out, meta["assets"] + added)
-    # Keep the kinds grouped in their bake order so the creator lists stay sorted.
-    meta["assets"] = sorted(meta["assets"] + added, key=lambda a: (KINDS.index(a["kind"]), a["name"]))
+    # Keep the kinds grouped in their bake order so the creator lists stay sorted; other kinds (genitals, see
+    # blender/bake_genitals.py) go last.
+    order = lambda kind: KINDS.index(kind) if kind in KINDS else len(KINDS)
+    meta["assets"] = sorted(meta["assets"] + added, key=lambda a: (order(a["kind"]), a["name"]))
     with open(meta_path, "w") as f:
         json.dump(meta, f)
     log(len(added), "assets added")

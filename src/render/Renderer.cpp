@@ -476,6 +476,7 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
     fd.groundAmbient = 0.15f * (sunT * fd.sunIntensity * std::max(sunUp, 0.0f) + fd.skyAmbient) + night * 0.5f;
     fd.cloudCoverage = params.cloudCoverage;
     fd.camMod64k = glm::vec3(glm::mod(cam, glm::dvec3(65536.0)));
+    fd.studio = params.studio;
     fd.skyLut = skyLutIndex_;
     fd.fogDensity = params.fogDensity;
     fd.camOriginMod = glm::vec3(glm::mod(cam, glm::dvec3(4096.0)));

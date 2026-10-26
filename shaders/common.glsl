@@ -23,7 +23,7 @@ layout(buffer_reference, scalar) readonly buffer FrameRef {
     vec4 cascadeTexel;
     vec3 skyAmbient;    uint skyLut;          // mean sky radiance over the upper hemisphere; sky-view LUT
     vec3 groundAmbient; float cloudCoverage;
-    vec3 camMod64k;     float pad2;           // camera ECEF mod 65536 m, for cloud noise
+    vec3 camMod64k;     float studio;         // camera ECEF mod 65536 m, for cloud noise; creator studio lights 0..1
 };
 
 struct TreeVertex { vec3 pos; vec3 normal; vec2 uv; };

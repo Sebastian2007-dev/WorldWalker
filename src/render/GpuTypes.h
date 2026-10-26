@@ -23,7 +23,7 @@ struct FrameData {
     glm::vec4 cascadeTexel;    // world size of one shadow texel per cascade
     glm::vec3 skyAmbient;    uint32_t skyLut;    // mean sky radiance over the upper hemisphere; sky-view LUT
     glm::vec3 groundAmbient; float cloudCoverage;
-    glm::vec3 camMod64k;     float pad2;         // camera ECEF mod 65536 m, for cloud noise
+    glm::vec3 camMod64k;     float studio;       // camera ECEF mod 65536 m, for cloud noise; creator studio lights 0..1
 };
 
 struct TerrainVertex {

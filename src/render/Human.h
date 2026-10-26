@@ -33,13 +33,25 @@ private:
         uint32_t scaleA[3]{}, scaleB[3]{};
         float reference[3]{1, 1, 1};
         bool scaled = false;
+        std::map<std::string, Target> morphs;  // optional (genitals): offset deltas per asset vertex, by name
     };
     std::filesystem::path directory_;
     nlohmann::json meta_;
     std::vector<glm::vec3> base_;
-    std::vector<RenderVertex> render_;
+    std::vector<RenderVertex> render_;             // subdivided body (see subdivide)
     std::vector<uint32_t> triangles_, joints_, weights_;
+    // One Catmull-Clark step of the body, as weights over the base vertices: base vertices keep their index, then
+    // one vertex per edge and one per face. Face points list exactly the face's corners.
+    std::vector<uint32_t> stencilStart_;
+    std::vector<std::pair<uint32_t, float>> stencil_;
+    uint32_t facePoints_ = 0;                      // index of the first face point
+    std::vector<uint32_t> neighborStart_, neighbors_;  // subdivided vertex adjacency, for skin creases
+    void subdivide();
+    // Skin assets ("skin") were fitted to the coarse body; rebinds them to the smoothed one, so that their edge lies on
+    // the rendered skin.
+    void bindSkinAssets();
     std::vector<Target> targets_;
+    std::vector<Target> realism_;  // sculpted anatomy per sex (tools/blender/bake_realism.py), optional
     std::vector<Asset> assets_;
     std::map<std::string, glm::vec3> meanColors_;  // mean linear colour of opaque texels, by texture path
     glm::vec3 meanColor(const std::string& texture);
