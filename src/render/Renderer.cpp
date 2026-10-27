@@ -131,7 +131,7 @@ void Renderer::init(gfx::Device& dev, gfx::Bindless& bindless, GLFWwindow* windo
         }
     }
     for (auto& b : frameBuffers_)
-        b = dev.createBuffer(sizeof(FrameData) * (1 + kCascades), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        b = dev.createBuffer(sizeof(FrameData) * (2 + kCascades), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                              VMA_MEMORY_USAGE_CPU_TO_GPU, true);
     skyLut_ = dev.createImage({kSkyLutW, kSkyLutH}, VK_FORMAT_R16G16B16A16_SFLOAT,
                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
@@ -398,7 +398,8 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
                       float time) {
     float dt = std::clamp(time - lastTime_, 0.0f, 0.25f);
     updateDynamicResolution(params, dt);
-    float scale = std::clamp(std::round(params.renderScale * dynamicScale_ * 20.0f) / 20.0f, 0.25f, 1.0f);
+    const bool room = params.studioRoom;
+    float scale = room ? 1.0f : std::clamp(std::round(params.renderScale * dynamicScale_ * 20.0f) / 20.0f, 0.25f, 1.0f);
     VkExtent2D full = dev_->swapExtent();
     if (scale != scale_ || std::max(64u, uint32_t(float(full.width) * scale + 0.5f)) != targetExtent_.width ||
         std::max(64u, uint32_t(float(full.height) * scale + 0.5f)) != targetExtent_.height) {
@@ -426,6 +427,7 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
     float aspect = float(ext.width) / float(ext.height);
     float zNear = calt - player.groundHeight() > 500.0 ? 2.0f : 0.05f;
     glm::mat4 proj = reversedInfinitePerspective(glm::radians(params.fovDeg), aspect, zNear);
+    proj[2][0] -= params.lensShift;  // off-axis projection: the view direction moves right of the screen centre
 
     FrameData fd{};
     fd.view = view;
@@ -453,6 +455,12 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
                     up * std::sin(el);
     fd.sunDir = glm::normalize(sun);
     float sunUp = glm::dot(fd.sunDir, up);
+    if (room) {
+        // The studio's key light: from above, a little in front of and beside the camera, with the noon sun's light.
+        glm::vec3 right = glm::normalize(glm::cross(fwd, up));
+        fd.sunDir = glm::normalize(up * 0.8f - fwd * 0.45f + right * 0.4f);
+        sunUp = 0.8f;
+    }
     // Sunlight and ambient light from the atmosphere model at the camera (km, local frame with z up, sun in xz).
     glm::vec3 sunLocal(std::sqrt(std::max(0.0f, 1.0f - sunUp * sunUp)), 0.0f, sunUp);
     glm::vec3 ro(0.0f, 0.0f, atmo::kRg + float(std::max(calt, 1.0)) * 1e-3f);
@@ -474,11 +482,18 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
     fd.skyAmbient = skyAmb / wsum + night;
     // Bounce light from the ground (albedo ~0.15) lit by sun and sky.
     fd.groundAmbient = 0.15f * (sunT * fd.sunIntensity * std::max(sunUp, 0.0f) + fd.skyAmbient) + night * 0.5f;
-    fd.cloudCoverage = params.cloudCoverage;
+    if (room) {
+        // A grey studio: the sky's brightness without its blue.
+        auto grey = [](glm::vec3 c) { return glm::vec3(glm::dot(c, glm::vec3(0.2126f, 0.7152f, 0.0722f))); };
+        fd.skyAmbient = grey(fd.skyAmbient);
+        fd.groundAmbient = grey(fd.groundAmbient);
+    }
+    fd.cloudCoverage = room ? 0.0f : params.cloudCoverage;
+    fd.room = room ? 1.0f : 0.0f;
     fd.camMod64k = glm::vec3(glm::mod(cam, glm::dvec3(65536.0)));
     fd.studio = params.studio;
     fd.skyLut = skyLutIndex_;
-    fd.fogDensity = params.fogDensity;
+    fd.fogDensity = room ? 0.0f : params.fogDensity;
     fd.camOriginMod = glm::vec3(glm::mod(cam, glm::dvec3(4096.0)));
     fd.camAltitude = float(calt);
     fd.camForward = fwd;
@@ -498,7 +513,7 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
     // Far cascades use a quarter of their tile: dense forest seen from the sun is mostly alpha-tested overdraw.
     const uint32_t shadowRes[kCascades] = {shadowTile_, shadowTile_, shadowTile_ / 2, shadowTile_ / 2};
     // Lower qualities skip the last cascade: shadows end at 100 m.
-    const uint32_t cascades = params.shadowQuality >= 2 ? kCascades : kCascades - 1;
+    const uint32_t cascades = room ? 0 : params.shadowQuality >= 2 ? kCascades : kCascades - 1;
     const float casterReach = 2000.0f;  // how far towards the sun casters (mountains) are still captured
     // Trees only throw shadows as long as their height allows at this sun elevation.
     float sunTan = glm::dot(fd.sunDir, up) / std::max(std::sqrt(1.0f - glm::dot(fd.sunDir, up) * glm::dot(fd.sunDir, up)), 1e-3f);
@@ -552,16 +567,6 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
         std::copy(s.frustum, s.frustum + 6, terrainPlanes[c]);
         terrainPlanes[c][5] = glm::vec4(-L, r + casterReach + glm::dot(center, L));
     }
-    if (!shadowsOn) fd.cascadeFar = glm::vec4(-1.0f);  // every visible point is past the last cascade: fully lit
-    else if (cascades < kCascades) fd.cascadeFar.w = fd.cascadeFar.z;  // past the last drawn cascade: lit
-
-    auto* mapped = static_cast<FrameData*>(frameBuffers_[fc.frameIndex].mapped);
-    mapped[0] = fd;
-    for (uint32_t c = 0; c < kCascades; ++c) mapped[1 + c] = shadowFd[c];
-    VkDeviceAddress frame = frameBuffers_[fc.frameIndex].address;
-    auto shadowFrame = [&](uint32_t c) { return frame + VkDeviceSize(1 + c) * sizeof(FrameData); };
-
-    // ---- compute: vegetation culling
     // Player character at the feet: model space x right, y forward, z up; camera relative.
     glm::dvec3 bodyFwd = player.north() * double(std::cos(player.bodyHeading())) +
                          player.east() * double(std::sin(player.bodyHeading()));
@@ -570,10 +575,53 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
     charModel[1] = glm::vec4(glm::vec3(bodyFwd), 0.0f);
     charModel[2] = glm::vec4(glm::vec3(player.up()), 0.0f);
     charModel[3] = glm::vec4(glm::vec3(player.position() - cam), 1.0f);
+
+    // ---- the character's own shadow map: a sphere around the body, in the free quarter of the third tile (the far
+    // cascades use only a quarter of theirs). Its depth reaches far behind the body, so it also casts onto the ground.
+    // In the studio there are no cascades: the character takes the whole atlas.
+    const uint32_t charRes = room ? shadowTile_ * 2 : shadowTile_ / 2;
+    const glm::ivec2 charTile = room ? glm::ivec2(0) : glm::ivec2(int(shadowTile_ / 2), int(shadowTile_));
+    fd.floorPos = glm::vec3(charModel[3]);
+    FrameData charFd = fd;
+    {
+        const float r = 1.25f, behind = 200.0f;
+        glm::vec3 center = glm::vec3(charModel[3]) + glm::vec3(charModel[2]) * 0.95f;
+        glm::mat4 m(0.0f);
+        auto setRow = [&](int row, glm::vec3 a, float w) {
+            m[0][row] = a.x, m[1][row] = a.y, m[2][row] = a.z, m[3][row] = w;
+        };
+        setRow(0, lx / r, -glm::dot(center, lx) / r);
+        setRow(1, ly / r, -glm::dot(center, ly) / r);
+        setRow(2, L / (r + behind), (behind - glm::dot(center, L)) / (r + behind));
+        setRow(3, glm::vec3(0), 1.0f);
+        float atlas = float(shadowTile_ * 2);
+        fd.charShadowMat = m;
+        fd.charShadowTexel = shadowsOn ? 2.0f * r / float(charRes) : 0.0f;
+        fd.charShadowScale = 0.5f * float(charRes) / atlas;
+        fd.charShadowOffset = (glm::vec2(charTile) + 0.5f * float(charRes)) / atlas;
+        charFd = fd;
+        charFd.viewProj = m;
+        charFd.shadowPass = 1.0f;
+    }
+    if (!shadowsOn || room) fd.cascadeFar = glm::vec4(-1.0f);  // every visible point is past the last cascade: fully lit
+    else if (cascades < kCascades) fd.cascadeFar.w = fd.cascadeFar.z;  // past the last drawn cascade: lit
+
+    auto* mapped = static_cast<FrameData*>(frameBuffers_[fc.frameIndex].mapped);
+    mapped[0] = fd;
+    for (uint32_t c = 0; c < kCascades; ++c) {
+        mapped[1 + c] = shadowFd[c];
+        mapped[1 + c].charShadowMat = fd.charShadowMat;
+        mapped[1 + c].charShadowTexel = fd.charShadowTexel;
+    }
+    mapped[1 + kCascades] = charFd;
+    VkDeviceAddress frame = frameBuffers_[fc.frameIndex].address;
+    auto shadowFrame = [&](uint32_t c) { return frame + VkDeviceSize(1 + c) * sizeof(FrameData); };
+
+    // ---- compute: vegetation culling
     character.prepare(fc.frameIndex);
 
     veg.beginFrame(fc.frameIndex, cam);
-    veg.cull(cmd, frame, 0);
+    if (!room) veg.cull(cmd, frame, 0);
     const uint32_t shadowMinLod[kCascades] = {1, 2, 2, 2};
     if (shadowsOn)
         for (uint32_t c = 0; c < cascades; ++c) veg.cull(cmd, shadowFrame(c), 1 + c, shadowMinLod[c]);
@@ -638,7 +686,13 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, terrainShadowPipe_);
             terrain.draw(cmd, layout, shadowFrame(c), cam, terrainPlanes[c]);
             veg.drawShadow(cmd, shadowFrame(c), 1 + c);
-            if (c < 3) character.draw(cmd, shadowFrame(c), charModel, true);  // also in first person: own shadow
+        }
+        if (shadowsOn) {
+            VkViewport svp{float(charTile.x), float(charTile.y), float(charRes), float(charRes), 0, 1};
+            VkRect2D ssc{{charTile.x, charTile.y}, {charRes, charRes}};
+            vkCmdSetViewport(cmd, 0, 1, &svp);
+            vkCmdSetScissor(cmd, 0, 1, &ssc);
+            character.draw(cmd, shadowFrame(kCascades), charModel, true);  // also in first person: own shadow
         }
         vkCmdEndRendering(cmd);
     }
@@ -684,16 +738,20 @@ void Renderer::render(gfx::FrameContext& fc, const game::Player& player, world::
 
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, nullptr);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, params.wireframe ? terrainWire_ : terrainPipe_);
-    terrain.draw(cmd, layout, frame, cam, fd.frustum);
-    veg.draw(cmd, frame);
-    if (params.grass) grass.draw(cmd, frame, cam, params.grassDensity);
+    if (!room) {
+        terrain.draw(cmd, layout, frame, cam, fd.frustum);
+        veg.draw(cmd, frame);
+        if (params.grass) grass.draw(cmd, frame, cam, params.grassDensity);
+    }
     if (player.view == game::Player::View::ThirdPerson) {
         if (character.loaded()) character.draw(cmd, frame, charModel, false);
         else drawCharacter(cmd, frame, player);  // placeholder mannequin when no character is baked
     }
     // Lakes last among the opaque scene: they blend over the lake bed and the terrain hides them above the shore.
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, waterPipe_);
-    terrain.drawWater(cmd, layout, frame, cam, fd.frustum);
+    if (!room) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, waterPipe_);
+        terrain.drawWater(cmd, layout, frame, cam, fd.frustum);
+    }
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skyPipe_);
     FullscreenPush fp{frame, hdrIndex_, params.exposure, params.menuFade, exposureBuf_.address};

@@ -148,7 +148,10 @@ void main() {
 
     Light lights[4];
     // The studio lights take over part of the daylight in the creator.
-    lights[0] = Light(f.sunDir, f.sunColor * f.sunIntensity * (1.0 - 0.55 * f.studio), sunShadow(f, vRel, ng, 1.0));
+    // Near the terminator the shadow map sees the body's facets, not its smooth shading: there the light's own falloff
+    // shades the body and the map would only add polygon shaped edges (the shadow terminator problem).
+    float sunShade = mix(1.0, sunShadow(f, vRel, ng, 2.0), smoothstep(0.0, 0.3, dot(ng, f.sunDir)));
+    lights[0] = Light(f.sunDir, f.sunColor * f.sunIntensity * (1.0 - 0.55 * f.studio), sunShade);
     int count = f.studio > 0.0 ? 4 : 1;
     for (int i = 1; i < count; ++i) lights[i] = studioLight(f, i - 1);
     float ambientScale = 1.0 - 0.3 * f.studio;

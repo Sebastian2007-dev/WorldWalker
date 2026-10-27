@@ -24,6 +24,9 @@ layout(buffer_reference, scalar) readonly buffer FrameRef {
     vec3 skyAmbient;    uint skyLut;          // mean sky radiance over the upper hemisphere; sky-view LUT
     vec3 groundAmbient; float cloudCoverage;
     vec3 camMod64k;     float studio;         // camera ECEF mod 65536 m, for cloud noise; creator studio lights 0..1
+    mat4 charShadowMat;                       // the player character's own shadow map (see GpuTypes.h)
+    float charShadowTexel; float charShadowScale; vec2 charShadowOffset;
+    vec3 floorPos;         float room;        // the character's feet, camera relative; 1 in the creator's studio
 };
 
 struct TreeVertex { vec3 pos; vec3 normal; vec2 uv; };
@@ -214,18 +217,9 @@ vec3 shadeFoliage(FrameRef f, vec3 albedo, vec3 n, vec3 v, float ao, float shado
 }
 
 #ifdef GL_FRAGMENT_SHADER
-// Cascaded sun shadow: 4 cascades in a 2x2 atlas, reversed depth, 4x4 texel PCF from four gathers.
-float sunShadow(FrameRef f, vec3 rel, vec3 n, float biasScale) {
-    float viewZ = dot(rel, f.camForward);
-    float clouds = cloudShadow(f, rel);
-    if (viewZ > f.cascadeFar.w || f.sunIntensity <= 0.0) return clouds;
-    int c = viewZ > f.cascadeFar.z ? 3 : (viewZ > f.cascadeFar.y ? 2 : (viewZ > f.cascadeFar.x ? 1 : 0));
-    float texel = f.cascadeTexel[c] * biasScale;
-    // Normal offset towards the light side of the surface keeps acne away without peter-panning.
-    vec3 nl = dot(n, f.sunDir) < 0.0 ? -n : n;
-    vec4 s = f.shadowMat[c] * vec4(rel + nl * texel * 1.5 + f.sunDir * texel, 1.0);
-    // Tent filtered PCF over 3x3 texels from four gathers: weights fall off with the sub-texel position, so light
-    // through small canopy gaps becomes soft spots instead of square texels.
+// Tent filtered PCF over 3x3 texels from four gathers at atlas uv s.xy, depth s.z: weights fall off with the sub-texel
+// position, so light through small canopy gaps becomes soft spots instead of square texels.
+float shadowTaps(FrameRef f, vec3 s) {
     float atlasSize = float(textureSize(textures[nonuniformEXT(f.shadowMap)], 0).x);  // depends on shadow quality
     vec2 tc = s.xy * atlasSize - 0.5;
     vec2 base = floor(tc), fr = tc - base;
@@ -239,8 +233,34 @@ float sunShadow(FrameRef f, vec3 rel, vec3 n, float biasScale) {
                           wx[2 * i] * wy[2 * j]);
             lit += dot(step(d, vec4(s.z + 1e-6)), w);
         }
-    lit /= 9.0;
-    return mix(lit, 1.0, smoothstep(f.cascadeFar.w * 0.8, f.cascadeFar.w, viewZ)) * clouds;
+    return lit / 9.0;
+}
+
+// Normal offset towards the light side of the surface keeps acne away without peter-panning.
+vec3 shadowOffset(FrameRef f, vec3 rel, vec3 n, float texel) {
+    vec3 nl = dot(n, f.sunDir) < 0.0 ? -n : n;
+    return rel + nl * texel * 1.5 + f.sunDir * texel;
+}
+
+// Cascaded sun shadow: 4 cascades in a 2x2 atlas, reversed depth. The player character is not in the cascades; it
+// has a map of its own, which shades the body and its shadow on the ground.
+float sunShadow(FrameRef f, vec3 rel, vec3 n, float biasScale) {
+    float viewZ = dot(rel, f.camForward);
+    float clouds = cloudShadow(f, rel);
+    if (f.sunIntensity <= 0.0) return clouds;
+    float lit = 1.0;
+    if (f.charShadowTexel > 0.0) {
+        // At least a few millimetres: below that the offset no longer covers the gap between the body's facets and its
+        // smooth normals, and the arms' shadows crack along the chest.
+        vec4 c = f.charShadowMat * vec4(shadowOffset(f, rel, n, max(f.charShadowTexel, 0.0025) * biasScale), 1.0);
+        if (all(lessThan(abs(c.xy), vec2(0.98))) && c.z > 0.0 && c.z < 1.0)
+            lit = shadowTaps(f, vec3(c.xy * f.charShadowScale + f.charShadowOffset, c.z));
+    }
+    if (viewZ > f.cascadeFar.w) return lit * clouds;
+    int c = viewZ > f.cascadeFar.z ? 3 : (viewZ > f.cascadeFar.y ? 2 : (viewZ > f.cascadeFar.x ? 1 : 0));
+    vec4 s = f.shadowMat[c] * vec4(shadowOffset(f, rel, n, f.cascadeTexel[c] * biasScale), 1.0);
+    float cascade = mix(shadowTaps(f, s.xyz), 1.0, smoothstep(f.cascadeFar.w * 0.8, f.cascadeFar.w, viewZ));
+    return min(cascade, lit) * clouds;
 }
 
 // Cotangent frame normal mapping (no stored tangents needed).

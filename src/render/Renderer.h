@@ -23,6 +23,7 @@ struct SceneParams {
     float fogDensity = 1.0f / 18000.0f;
     float impostorDistance = 2000.0f;
     float fovDeg = 70.0f;
+    float lensShift = 0.0f;     // horizontal image shift, in half screen widths (creator preview)
     bool wireframe = false;
     bool shadows = true;
     bool grass = true;
@@ -40,6 +41,9 @@ struct SceneParams {
     float treeDetail = 1.0f;        // tree LOD distance factor
     float menuFade = 0.0f;      // 0..1, blurs and dims the scene behind the pause menu
     float studio = 0.0f;        // 0..1, camera fixed studio lights on the character (creator preview)
+    // The character creator's studio: no world, a backdrop with a floor, fixed light, full resolution and the whole
+    // shadow atlas for the character.
+    bool studioRoom = false;
 };
 
 // GPU time per stage of a frame in milliseconds, measured with timestamp queries (0 when unsupported).

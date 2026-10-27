@@ -69,6 +69,8 @@ public:
 
     // Advances and blends the animation; call once per frame.
     void update(float dt, const AnimInput& in);
+    // Off: the mesh stays in its bind pose (checks of the mesh and skinning without animation, --no-anim).
+    void setAnimated(bool on) { animated_ = on; }
     // Uploads this frame's joint palette. Call before any draw of the frame.
     void prepare(uint32_t frameIndex);
     // model: model space (z up, +y forward) -> camera relative world.
@@ -111,6 +113,7 @@ private:
     float hipScale_ = 1.0f;         // target hip height / source hip height
     std::vector<Clip> clips_;
     std::vector<Layer> layers_;     // one per clip
+    bool animated_ = true;
     std::vector<MeshPart> parts_;
     std::vector<gfx::Image> textures_;
     std::unordered_map<std::string, uint32_t> textureCache_;

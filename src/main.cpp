@@ -64,6 +64,9 @@ int main(int argc, char** argv) {
     const char* creatorTemplate = nullptr;
     float creatorDistance = -1.0f, creatorOrbit = -1.0f, creatorLift = 0.0f;
     bool creatorNude = false;
+    bool noAnim = false;
+    std::vector<std::string> creatorAssets;  // --creator-asset <name>: replaces the selected asset of that kind  // --no-anim: the character stays in its bind pose
+    const char* humanDir = "mblab";  // --human human: the MakeHuman body (bake_human.py) instead of MB-Lab's
     std::vector<std::pair<std::string, float>> creatorSet;  // --creator-set key=value (numeric appearance values)
     bool thirdPerson = false, timeGiven = false, noShadows = false, noGrass = false, noTaa = false, noSsao = false;
     float clouds = -1.0f;
@@ -82,6 +85,9 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--creator-distance") && i + 1 < argc) creatorDistance = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--creator-orbit") && i + 1 < argc) creatorOrbit = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--creator-nude")) creatorNude = true;
+        else if (!std::strcmp(argv[i], "--human") && i + 1 < argc) humanDir = argv[++i];
+        else if (!std::strcmp(argv[i], "--no-anim")) noAnim = true;
+        else if (!std::strcmp(argv[i], "--creator-asset") && i + 1 < argc) creatorAssets.push_back(argv[++i]);
         else if (!std::strcmp(argv[i], "--creator-set") && i + 1 < argc) {
             std::string kv = argv[++i];
             if (auto eq = kv.find('='); eq != std::string::npos) creatorSet.push_back({kv.substr(0, eq), float(std::atof(kv.c_str() + eq + 1))});
@@ -179,8 +185,9 @@ int main(int argc, char** argv) {
     character.init(dev, bindless, assetDir / "baked" / "character", render::Renderer::hdrFormat(),
                    render::Renderer::depthFormat());
     character.loadBakedMesh(assetDir / "baked" / "character");
+    if (noAnim) character.setAnimated(false);
     render::Human human;
-    human.load(assetDir / "baked" / "human");
+    human.load(assetDir / "baked" / humanDir);
     fs::path characterFile = assetDir.parent_path() / "character.json";
     if (human.ready()) {
         if (human.loadPreset(characterFile)) {
@@ -229,6 +236,18 @@ int main(int argc, char** argv) {
         else human.applyTemplate(!std::strcmp(creatorTemplate,"female") ? render::Human::Template::Female : render::Human::Template::Male);
     }
     if (creator.isOpen() && creatorNude) human.state["underwear"] = false;
+    if (creator.isOpen())
+        for (auto& name : creatorAssets)
+            for (auto& a : human.catalog()["assets"]) {
+                if (a["name"] != name) continue;
+                auto& selected = human.state["assets"];
+                for (auto it = selected.begin(); it != selected.end();) {
+                    bool sameKind = false;
+                    for (auto& b : human.catalog()["assets"]) sameKind |= b["name"] == *it && b["kind"] == a["kind"];
+                    it = sameKind ? selected.erase(it) : it + 1;
+                }
+                selected.push_back(name);
+            }
     if (creator.isOpen()) for (auto& [key, value] : creatorSet) human.state[key] = value;
     if (creatorDistance > 0.0f || creatorOrbit >= 0.0f || creatorLift != 0.0f) {
         ui::CharacterCreator::View view;
@@ -344,13 +363,11 @@ int main(int argc, char** argv) {
             // The camera stays above the ground: looking up is limited by how far below the focus it may go.
             creator.limitPitch(glm::degrees(std::asin(std::clamp((focus - 0.12f) / view.distance, -1.0f, 1.0f))));
             player.setLook(player.bodyHeading() * 57.29578f + view.orbit, view.pitch);
-            // Centre the character in the free area right of the panel: shift the focus sideways by that point's
-            // offset from the screen centre at the focus distance.
-            ImVec2 display = ImGui::GetIO().DisplaySize;
-            float aspect = display.y > 0 ? display.x / display.y : 16.0f / 9.0f;
-            float shift = creator.previewLeft * view.distance * std::tan(glm::radians(params.fovDeg) * 0.5f) * aspect;
-            player.previewCamera(view.distance, focus, shift);
+            // The camera faces the character; the image is shifted so it stands in the centre of the free area
+            // right of the panel. Moving the camera sideways instead would show the body at an angle.
+            player.previewCamera(view.distance, focus, 0.0f);
         }
+        params.lensShift = creator.isOpen() ? creator.previewLeft : 0.0f;
         render::AnimInput anim;
         anim.velocity = player.localVelocity();
         anim.grounded = player.onGround();
@@ -427,6 +444,7 @@ int main(int argc, char** argv) {
         finishCreator(creator.draw(human,character,characterFile));
         params.menuFade = creator.isOpen() ? 0.0f : menu.fade();
         params.studio += ((creator.isOpen() ? 1.0f : 0.0f) - params.studio) * std::min(dt * 4.0f, 1.0f);
+        params.studioRoom = creator.isOpen();
         ImGui::Render();
 
         if (shotPath) {

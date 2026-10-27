@@ -25,10 +25,31 @@ vec4 cloudLayer(FrameRef f, vec3 dir) {
     return vec4(col, dens * (1.0 - smoothstep(70000.0, 120000.0, t)));
 }
 
+// The character creator's studio: a floor under the character, catching its shadow, that fades into a curved backdrop
+// darkening upwards. Lit like a matte surface under the studio's key light.
+vec3 studio(FrameRef f, vec3 dir) {
+    vec3 up = f.camUp, v = -dir;
+    vec3 grey = vec3(0.16, 0.155, 0.15);
+    vec3 base = shadeSurface(f, grey, up, up, 0.9, 1.0, 1.0);  // the unshadowed floor, the backdrop's reference
+    float rise = dot(dir, up);
+    vec3 wall = base * mix(0.5, 0.12, smoothstep(-0.05, 0.6, rise));
+    float denom = rise;
+    if (denom >= -1e-4) return wall;
+    vec3 hit = dir * (dot(f.floorPos, up) / denom);  // camera relative point on the floor
+    float dist = length(hit - f.floorPos);
+    vec3 floorCol = shadeSurface(f, grey, up, v, 0.9, 1.0, sunShadow(f, hit, up, 1.0));
+    floorCol *= 1.0 - 0.35 * smoothstep(1.0, 4.0, dist);
+    return mix(floorCol, wall, smoothstep(3.5, 9.0, dist));
+}
+
 void main() {
     FrameRef f = pc.frame;
     vec4 p = f.invViewProj * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
     vec3 dir = normalize(p.xyz / p.w);
+    if (f.room > 0.5) {
+        outColor = vec4(studio(f, dir), 1.0);
+        return;
+    }
     vec3 sky = skyRadiance(f, dir) + sunDisk(f, dir);
     vec4 clouds = cloudLayer(f, dir);
     outColor = vec4(mix(sky, clouds.rgb, clouds.a), 1.0);

@@ -24,6 +24,11 @@ struct FrameData {
     glm::vec3 skyAmbient;    uint32_t skyLut;    // mean sky radiance over the upper hemisphere; sky-view LUT
     glm::vec3 groundAmbient; float cloudCoverage;
     glm::vec3 camMod64k;     float studio;       // camera ECEF mod 65536 m, for cloud noise; creator studio lights 0..1
+    // The player character's own shadow map in a free corner of the atlas, fine enough for self-shadowing on the body:
+    // camera relative position -> clip space [-1,1] and depth; atlas uv = clip * scale + offset. Off while texel is 0.
+    glm::mat4 charShadowMat;
+    float charShadowTexel;   float charShadowScale; glm::vec2 charShadowOffset;
+    glm::vec3 floorPos;      float room;         // the character's feet, camera relative; 1 in the creator's studio
 };
 
 struct TerrainVertex {

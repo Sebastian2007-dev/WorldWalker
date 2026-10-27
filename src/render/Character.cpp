@@ -331,6 +331,7 @@ void Character::setTarget(int clip, float w) {
 
 void Character::update(float dt, const AnimInput& in) {
     if (!loaded() || clips_.empty()) return;
+    if (!animated_) { samplePose(); return; }
     for (auto& l : layers_) l.target = 0.0f;
 
     // ---- airborne: jump take-off, then falling; long falls end in a landing
@@ -453,7 +454,10 @@ void Character::samplePose() {
         }
         total += l.weight;
     }
-    if (total <= 0.0f) return;
+    if (total <= 0.0f || !animated_) {  // bind pose
+        if (!animated_) std::fill(palette_.begin(), palette_.end(), glm::mat4(1.0f));
+        return;
+    }
     hipOffset /= total;
 
     // Retargeted pose: bone rotation = delta * align * bind; children hang off their parent at bind distance.

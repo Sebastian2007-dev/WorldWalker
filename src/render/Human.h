@@ -1,6 +1,7 @@
 #pragma once
 #include "render/Character.h"
 #include <map>
+#include <memory>
 #include <nlohmann/json.hpp>
 
 namespace render {
@@ -35,6 +36,18 @@ private:
         bool scaled = false;
         std::map<std::string, Target> morphs;  // optional (genitals): offset deltas per asset vertex, by name
     };
+    // Humans whose sexes have different meshes (tools/blender/bake_mblab.py: <dir>/female, <dir>/male) keep the
+    // other sex's data here; activate swaps it in.
+    std::unique_ptr<Human> other_;
+    bool loadDirectory(const std::filesystem::path& directory);
+    void activate(bool female);
+    void swapData(Human& other);
+    // Selects the template's asset for every body part (eyes, eyelashes, ...) the selection has none of in this
+    // catalog, and the template skin for an invalid skin index: presets made for another mesh keep working.
+    void completeSelection();
+    // MB-Lab's morph model ("modifiers" in human.json): properties from the detail sliders and body macros, mixed
+    // into targets by MB-Lab's smart combo.
+    void applyModifiers(std::vector<glm::vec3>& positions, const std::map<std::string,float>& factors);
     std::filesystem::path directory_;
     nlohmann::json meta_;
     std::vector<glm::vec3> base_;

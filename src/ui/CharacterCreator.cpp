@@ -312,7 +312,8 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
     };
     if(tab_==0) {
         theme::section("PROPORTIONEN");
-        slider("Körperform","gender",1);
+        // Humans with one mesh per sex (MB-Lab) take the sex from the template.
+        if(!catalog.contains("sex")) slider("Körperform","gender",1);
         slider("Alter","age",0.5f,0.5f,1.0f);
         slider("Muskelmasse","muscle",0.5f); slider("Gewicht","weight",0.5f);
         slider("Größe","height",0.5f); slider("Proportionen","proportions",0.5f);
@@ -356,7 +357,7 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
         auto group=[&](const std::string& g) {
             std::vector<std::pair<const nlohmann::json*,DetailText>> rows;
             for(auto& s:catalog["sliders"]) if(s["group"]==g) {
-                auto text=detailText(s["name"]);
+                auto text=s.contains("label")?DetailText{s["label"],s.value("lo",std::string()),s.value("hi",std::string())}:detailText(s["name"]);
                 if(!query.empty() && lower(text.label).find(query)==std::string::npos &&
                    lower(s["name"].get<std::string>()).find(query)==std::string::npos) continue;
                 rows.push_back({&s,text});
@@ -367,7 +368,7 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
             if(query.empty() ? !ImGui::CollapsingHeader(title.c_str()) : (ImGui::TextDisabled("%s",title.c_str()),false)) return;
             for(auto& [s,text]:rows) {
                 std::string key=g+"/"+(*s)["name"].get<std::string>();
-                bool oneSided=(*s)["neg"].get<int>()<0;
+                bool oneSided=s->value("neg",0)<0;
                 float v=details.contains(key)&&details[key].is_number()?details[key].get<float>():0.0f;
                 ImGui::PushTextWrapPos(width); ImGui::TextUnformatted(text.label.c_str()); ImGui::PopTextWrapPos();
                 ImGui::SetNextItemWidth(width-S(12));

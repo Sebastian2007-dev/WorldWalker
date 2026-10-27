@@ -1,5 +1,6 @@
 #include "render/Human.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <fstream>
 #include <map>
@@ -55,6 +56,39 @@ glm::vec3 Human::meanColor(const std::string& texture) {
     return meanColors_[texture]=glm::max(result,glm::vec3(0.002f));
 }
 bool Human::load(const std::filesystem::path& directory) {
+    other_.reset();
+    if(!std::filesystem::exists(directory/"female"/"human.json")) return loadDirectory(directory);
+    other_=std::make_unique<Human>();
+    if(!other_->loadDirectory(directory/"female") || !loadDirectory(directory/"male")) { other_.reset(); base_.clear(); return false; }
+    return true;
+}
+void Human::swapData(Human& o) {
+    std::swap(directory_,o.directory_); std::swap(meta_,o.meta_); std::swap(base_,o.base_); std::swap(render_,o.render_);
+    std::swap(triangles_,o.triangles_); std::swap(joints_,o.joints_); std::swap(weights_,o.weights_);
+    std::swap(stencilStart_,o.stencilStart_); std::swap(stencil_,o.stencil_); std::swap(facePoints_,o.facePoints_);
+    std::swap(neighborStart_,o.neighborStart_); std::swap(neighbors_,o.neighbors_); std::swap(targets_,o.targets_);
+    std::swap(realism_,o.realism_); std::swap(assets_,o.assets_); std::swap(meanColors_,o.meanColors_);
+}
+void Human::activate(bool female) {
+    if(other_ && (meta_.value("sex",std::string())=="female")!=female) swapData(*other_);
+}
+void Human::completeSelection() {
+    if(!state.contains("assets") || !state["assets"].is_array()) return;
+    std::set<std::string> present;
+    for(auto& a:meta_["assets"]) for(auto& s:state["assets"]) if(s==a["name"]) present.insert(a["kind"].get<std::string>());
+    for(auto& a:meta_["assets"]) {
+        std::string kind=a["kind"];
+        if(kind=="clothes" || kind=="hair" || kind=="genitals" || present.count(kind)) continue;
+        state["assets"].push_back(a["name"]); present.insert(kind);
+    }
+    int skin=state.value("skin",0);
+    if(skin<0 || size_t(skin)>=meta_["skins"].size()) {
+        std::string wanted=state.value("template",std::string("male"))=="female"?"young_caucasian_female":"young_caucasian_male";
+        state["skin"]=0;
+        for(size_t i=0;i<meta_["skins"].size();++i) if(meta_["skins"][i]["name"]==wanted) state["skin"]=i;
+    }
+}
+bool Human::loadDirectory(const std::filesystem::path& directory) {
     try {
         directory_=directory;
         std::ifstream jf(directory / "human.json"); jf >> meta_;
@@ -81,6 +115,9 @@ bool Human::load(const std::filesystem::path& directory) {
         }
         for(auto& r:meta_.value("realism",nlohmann::json::array()))
             if(r.value("target",-1)<0 || size_t(r.value("target",-1))>=realism_.size()) throw std::runtime_error("Invalid realism entry");
+        auto validTarget=[&](const nlohmann::json& t) { return t.is_number_integer() && t.get<int>()>=0 && size_t(t.get<int>())<targets_.size(); };
+        for(auto& m:meta_.value("modifiers",nlohmann::json::array())) for(auto& t:m.at("targets"))
+            if(t.is_object() ? !std::all_of(t.begin(),t.end(),validTarget) : !validTarget(t)) throw std::runtime_error("Invalid modifier target");
         assets_.clear();
         for(auto& a:meta_["assets"]) {
             Asset asset; std::ifstream af(directory/a.at("file").get<std::string>(),std::ios::binary);
@@ -262,6 +299,7 @@ void Human::reset() {
 }
 void Human::applyTemplate(Template body) {
     const bool female=body==Template::Female;
+    activate(female);
     state={{"version",1},{"enabled",true},{"template",female?"female":"male"},
            {"gender",female?0.0f:1.0f},{"age",0.5f},{"muscle",female?0.42f:0.62f},{"weight",female?0.46f:0.49f},
            {"height",female?0.48f:0.56f},{"proportions",0.65f},{"cupsize",0.44f},{"firmness",0.6f},
@@ -271,12 +309,17 @@ void Human::applyTemplate(Template body) {
     // The bob's texture is a pale ash blond; a warm brown reads better as the starting look.
     if(female) { auto& c=hairShades()[2].rgb; state["hairColor"]={c[0],c[1],c[2]}; }
     std::map<std::string,bool> selected;
+    // The template's hairstyle: the first of these the catalog has (MakeHuman's, then the fitted packs').
+    std::string hair;
+    for(auto name:female?std::initializer_list<const char*>{"hair_bob02","hair_cc_bun","hair_cc_ponytail"}
+                        :std::initializer_list<const char*>{"hair_short01"})
+        for(auto& a:meta_["assets"]) if(hair.empty() && a["name"]==name) hair=name;
     for(size_t i=0;i<meta_["skins"].size();++i)
         if(meta_["skins"][i]["name"]==(female?"young_caucasian_female":"young_caucasian_male")) state["skin"]=i;
     for(auto& a:meta_["assets"]) {
         std::string kind=a["kind"], name=a["name"];
         bool use=kind!="clothes" && kind!="hair" && !selected[kind];
-        if(kind=="hair") use=name==(female?"hair_bob02":"hair_short01");
+        if(kind=="hair") use=name==hair;
         if(kind=="clothes") use=name==(female?"clothes_female_casualsuit01":"clothes_male_casualsuit01") || name=="clothes_shoes01";
         // Genitals: the first asset made for this sex (bake_genitals.py), none if there is no such asset.
         if(kind=="genitals") use=!selected[kind] && a.value("sex",std::string())==(female?"female":"male");
@@ -304,7 +347,7 @@ void Human::randomize(uint32_t seed) {
     static const std::set<std::string> face={"head","forehead","eyebrows","nose","mouth","cheek","chin","ears"};
     for(auto& s:meta_["sliders"]) {
         if(!face.count(s["group"].get<std::string>()) || rng()%3) continue;
-        bool oneSided=s["neg"].get<int>()<0;
+        bool oneSided=s.value("neg",0)<0;
         state["details"][s["group"].get<std::string>()+"/"+s["name"].get<std::string>()]=oneSided?uniform(0.0f,0.2f):uniform(-0.3f,0.3f);
     }
     float age=state["age"];
@@ -336,7 +379,7 @@ void Human::randomize(uint32_t seed) {
         "hair_elvs_inverted_curlybob1","hair_elvs_island_princess1","hair_elvs_katherinehair1","hair_elvs_ladies_hippyhair1",
         "hair_elvs_laracroft_hair1a","hair_elvs_mickey_afro","hair_elvs_short_daisyh1","hair_elvs_that80sbabe_m1",
         "hair_elvscurly_bob1","hair_hair_07","hair_hair_08","hair_long2_alpha7","hair_long_alpha7","hair_o4saken_chinesebob01",
-        "hair_o4saken_curly01","hair_witchybob_elv2"});
+        "hair_o4saken_curly01","hair_witchybob_elv2","hair_cc_long","hair_cc_ponytail","hair_cc_bun"});
     else replace(prefix("hair_"),{"hair_short01","hair_short02","hair_short03","hair_short04","hair_afro01","hair_mhair02",
         "hair_hair_05","hair_hair1","hair_short_messy","hair_elvs_grumphair","hair_elvs_keylth_hair_m1",
         "hair_elvs_thejournalist1","hair_hair_03","hair_hair_04","hair_maxwell_hair_mh"});
@@ -382,7 +425,7 @@ bool Human::loadPreset(const std::filesystem::path& file) {
             float v=it.value().get<float>(); if(!std::isfinite(v)) return false;
             it.value()=std::clamp(v,-1.0f,1.0f);
         }
-        state=std::move(next); return true;
+        state=std::move(next); activate(state["template"]=="female"); completeSelection(); return true;
     } catch(...) { return false; }
 }
 bool Human::savePreset(const std::filesystem::path& file) const {
@@ -394,8 +437,75 @@ bool Human::savePreset(const std::filesystem::path& file) const {
         std::filesystem::remove(temp); return true;
     } catch(...) { return false; }
 }
+void Human::applyModifiers(std::vector<glm::vec3>& positions, const std::map<std::string,float>& factors) {
+    if(!meta_.contains("modifiers")) return;
+    // Properties: neutral 0.5; a detail slider (-1..1) spans 0..1.
+    std::map<std::string,float> props;
+    for(auto& p:meta_["properties"]) props[p.get<std::string>()]=0.5f;
+    auto& details=state["details"];
+    for(auto& s:meta_["sliders"]) {
+        if(!s.contains("prop")) continue;
+        std::string key=s["group"].get<std::string>()+"/"+s["name"].get<std::string>();
+        float v=details.contains(key)&&details[key].is_number()?details[key].get<float>():0.0f;
+        if(std::isfinite(v)) props[s["prop"].get<std::string>()]=0.5f+0.5f*std::clamp(v,-1.0f,1.0f);
+    }
+    // Body macros as MB-Lab's age, mass and tone (-1..1): each shifts the properties containing a table entry's name
+    // (MB-Lab humanoid.calculate_transformation).
+    const std::pair<const char*,float> meta[]={{"age_data",(value(state,"age",0.5f)-0.5f)*2},
+        {"fat_data",value(state,"weight",0.5f)*2-1},{"muscle_data",value(state,"muscle",0.5f)*2-1}};
+    for(auto [table,x]:meta) {
+        float below=std::max(-x,0.0f), above=std::max(x,0.0f);
+        for(auto& row:meta_["transformations"].value(table,nlohmann::json::array())) {
+            std::string part=row.at(0);
+            for(auto& [name,v]:props) if(name.find(part)!=std::string::npos) v+=row.at(1).get<float>()*below+row.at(2).get<float>()*above;
+        }
+    }
+    auto shift=[&](const char* prop,float d) { if(auto it=props.find(prop); it!=props.end()) it->second+=d; };
+    shift("Torso_BreastMass",value(state,"cupsize",0.5f)-0.5f);
+    shift("Torso_BreastTone",value(state,"firmness",0.5f)-0.5f);
+    shift("Body_Size",value(state,"height",0.5f)-0.5f);
+    // Smart combo (MB-Lab algorithms.smart_combo): every combination of the modifier's property ends weighs the sum of
+    // its ends' strengths; combinations within a third of the best one share the strongest property's strength.
+    for(auto& m:meta_["modifiers"]) {
+        auto& names=m["props"];
+        size_t n=names.size(); if(n==0 || n>8) continue;
+        std::vector<std::array<float,2>> ends(n);  // strength towards "max", towards "min"
+        float factor=0;
+        for(size_t k=0;k<n;++k) {
+            auto it=props.find(names[k].get<std::string>()); float v=it!=props.end()?it->second:0.5f;
+            ends[k]={v>0.5f?2*v-1:0.0f,v<0.5f?1-2*v:0.0f};
+            factor=std::max({factor,ends[k][0],ends[k][1]});
+        }
+        if(factor<=0) continue;
+        std::vector<float> w(size_t(1)<<n,0.0f);
+        float best=0, sum=0;
+        for(size_t c=0;c<w.size();++c) {
+            for(size_t k=0;k<n;++k) w[c]+=ends[k][(c>>(n-1-k))&1];
+            best=std::max(best,w[c]);
+        }
+        for(auto& x:w) { x=std::max(0.0f,x-best/1.5f); sum+=x; }
+        if(sum<=0) continue;
+        for(size_t c=0;c<w.size();++c) {
+            if(w[c]<=0) continue;
+            std::string tags;
+            for(size_t k=0;k<n;++k) tags+=std::string(k?"-":"")+(((c>>(n-1-k))&1)?"min":"max");
+            auto t=m["targets"].find(tags);
+            if(t==m["targets"].end()) continue;
+            float weight=factor*w[c]/sum;
+            auto apply=[&](int index,float x) {
+                auto& target=targets_[size_t(index)];
+                for(size_t i=0;i<target.indices.size();++i) positions[target.indices[i]]+=target.delta[i]*x;
+            };
+            // Face morphs differ per ancestry: blended by the ancestry mix.
+            if(t->is_object()) { for(auto& [race,index]:t->items()) if(auto f=factors.find(race); f!=factors.end()) apply(index,weight*f->second); }
+            else apply(t->get<int>(),weight);
+        }
+    }
+}
 bool Human::rebuild(Character& character, bool hideClothes) {
     if(!ready()) return false;
+    activate(state.value("template",std::string("male"))=="female");
+    completeSelection();
     try {
         std::vector<bool> active(assets_.size());
         bool outfit=false;
@@ -456,6 +566,7 @@ bool Human::rebuild(Character& character, bool hideClothes) {
             apply(it.value().get<int>(),w);
         }
         for(auto& s:meta_["sliders"]) {
+            if(s.contains("prop")) continue;
             std::string key=s["group"].get<std::string>()+"/"+s["name"].get<std::string>();
             auto& details=state["details"];
             float v=details.contains(key)&&details[key].is_number()?details[key].get<float>():0;
@@ -463,6 +574,7 @@ bool Human::rebuild(Character& character, bool hideClothes) {
             v=std::clamp(v,s["neg"].get<int>()<0?0.0f:-1.0f,1.0f);
             apply(s[v<0?"neg":"pos"].get<int>(),std::abs(v));
         }
+        applyModifiers(positions,factors);
         // Sculpted anatomy (bake_realism.py), blended by sex.
         const float gender=value(state,"gender",0.5f), definition=value(state,"definition",0.6f);
         for(auto& r:meta_.value("realism",nlohmann::json::array())) {
@@ -479,12 +591,18 @@ bool Human::rebuild(Character& character, bool hideClothes) {
         for(auto& r:render_) ground=std::min(ground,positions[r.base].z);
         for(auto& p:positions) p.z-=ground;
         std::vector<SkeletonBone> bones;
-        auto mean=[&](const nlohmann::json& ids) { glm::vec3 p(0); for(auto& i:ids) p+=positions[i.get<size_t>()]; return p/float(ids.size()); };
+        // A joint is the mean of its vertices, plus an optional fixed offset (MB-Lab).
+        auto joint=[&](const nlohmann::json& b,const char* key) {
+            glm::vec3 p(0); for(auto& i:b[key]) p+=positions[i.get<size_t>()];
+            p/=float(b[key].size());
+            std::string offset=std::string(key)+"Offset";
+            return b.contains(offset)?p+vec(b[offset]):p;
+        };
         for(auto& b:meta_["bones"]) {
             auto q=b["rot"]; glm::quat rot(q[3].get<float>(),q[0].get<float>(),q[1].get<float>(),q[2].get<float>());
-            glm::vec3 oldDir=vec(b["neutralTail"])-vec(b["neutralHead"]), newDir=mean(b["tail"])-mean(b["head"]);
+            glm::vec3 oldDir=vec(b["neutralTail"])-vec(b["neutralHead"]), newDir=joint(b,"tail")-joint(b,"head");
             if(glm::length(oldDir)>1e-5f && glm::length(newDir)>1e-5f) rot=glm::rotation(glm::normalize(oldDir),glm::normalize(newDir))*rot;
-            bones.push_back({b["name"],b["parent"],glm::normalize(rot),mean(b["head"])});
+            bones.push_back({b["name"],b["parent"],glm::normalize(rot),joint(b,"head")});
         }
         std::vector<bool> hidden(positions.size(),false);
         for(size_t a=0;a<assets_.size();++a) if(active[a]) for(auto i:assets_[a].deleted) hidden[i]=true;
@@ -522,6 +640,8 @@ bool Human::rebuild(Character& character, bool hideClothes) {
         body.shading=MeshPart::Shading::Skin; body.tint=skinTint;
         // The sculpt's detail fits the sculpt's shape: it fades in together with that shape ("definition").
         if(relief!=skin) body.normalScale=definition;
+        // MB-Lab's skin relief includes the wrinkles of an old body: young adults keep only its fine grain.
+        else if(meta_.contains("modifiers")) body.normalScale=glm::mix(0.3f,1.0f,glm::smoothstep(0.55f,1.0f,value(state,"age",0.5f)));
         parts.push_back(body);
         // Vertices of skin assets with the body vertices they follow, to take over the body's crease shading.
         struct OnSkin { uint32_t vertex; const ProxyVertex* proxy; float height; };  // height above the skin, metres
