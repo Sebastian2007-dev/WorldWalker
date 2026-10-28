@@ -2,7 +2,10 @@
 # assetpacks/) to the MakeHuman bake: clothes, shoes, underwear, swimwear, accessories, jewellery and beards that look
 # like real ones (no costumes, wings, superhero suits or psychedelic prints).
 #
-#   python tools/install_asset_packs.py <extracted_packs_dir> <selection.json> [makehuman_bake_dir]
+#   python tools/install_asset_packs.py <extracted_packs_dir> tools/asset_pack_selection.json [makehuman_bake_dir]
+#
+# The packs: tools/asset_packs.txt (pack, licence suffix), from
+# https://files.makehumancommunity.org/asset_packs/<pack>/<pack>_<suffix>.zip, each unzipped into its own directory.
 #
 # <extracted_packs_dir> holds one directory per downloaded pack zip (clothes/<asset>/..., packs/<pack>.json).
 # selection.json: {"exclude": [asset, ...], "unsorted": [asset, ...]}: assets left out of the kept categories, and the
