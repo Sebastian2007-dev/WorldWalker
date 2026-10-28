@@ -106,6 +106,12 @@
       "fps": 30.0
     },
     {
+      "name": "standing_idle",
+      "file": "standing_idle.wwa",
+      "frames": 181,
+      "fps": 30.0
+    },
+    {
       "name": "walking",
       "file": "walking.wwa",
       "frames": 32,

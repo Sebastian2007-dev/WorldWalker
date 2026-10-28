@@ -1,10 +1,12 @@
-# Blender background script: fits hairstyles made on a Character Creator head (OBJ exports that include that head)
-# onto the MB-Lab bodies baked by bake_mblab.py, and adds them to each body's human.json as "hair" assets.
+# Blender background script: fits hairstyles onto the MB-Lab bodies baked by bake_mblab.py, and adds them to each
+# body's human.json as "hair" assets. Two kinds of source: Character Creator OBJ exports that include the head they
+# were made on, and rigged FBX hairstyles (VRChat style) without a head.
 #
 #   blender -b --python tools/blender/bake_hair.py -- <hair_root> <mblab_out_dir>
 #
 # <hair_root> holds the unpacked packs (see HAIRS). Per hairstyle and body:
-#   1. The source head is aligned to the MB-Lab head: eye centres first, then a similarity ICP on the skull.
+#   1. The source head is aligned to the MB-Lab head: eye centres first, then a similarity ICP on the skull. Without a
+#      head, the hair's inner shell over the skull stands in for it, starting from the rig's head joint.
 #   2. What remains between the heads is a displacement field (closest points, smoothed); every hair vertex moves with
 #      the field of the head around it, and vertices that end up under the skin are pushed out of it.
 #   3. Each vertex is bound to the nearest triangle of the head, neck or upper body (barycentric weights + offset),
@@ -42,6 +44,22 @@ HAIRS = [
               + [("Scalp", None, "bun/" + FBM + "Scalp1_Transparency_Diffuse.jpg",
                   "bun/" + FBM + "Scalp1_Transparency_Opacity.jpg")]},
 ]
+# Rigged FBX hairstyles (unpacked to wetcat/ and dawn/): the WetCat pack ships previews instead of its textures, so its
+# solid strands get the pack's grey strand texture (tex.png); Dawn's hair cards come with an alpha texture (from the
+# unitypackage, first uv set).
+WETCAT = [("hair_wc_alexxa", "Lang, offen (Alexxa)", "Hair_AleXXA_By_WetCAt.fbx"),
+          ("hair_wc_faith", "Lang mit Zöpfchen (Faith)", "Faith_hair(July)_by_WetCat.fbx"),
+          ("hair_wc_freya", "Seitenzopf (Freya)", "Hair_Freya(By_WetCat).fbx"),
+          ("hair_wc_kitty", "Zwei Zöpfe (Kitty)", "Hair_BadKittyProject.fbx"),
+          ("hair_wc_lilia", "Sehr lang (Lilia)", "Hair(Lilia)_By_WetCat.fbx"),
+          ("hair_wc_lissa", "Lang mit Pony (Lissa)", "HairLissa.fbx"),
+          ("hair_wc_misty", "Lang, gestuft (Misty)", "MistyHair(By_WetCat).fbx"),
+          ("hair_wc_nina", "Lang, glatt (Nina)", "HairNina.fbx"),
+          ("hair_wc_selena", "Halblang (Selena)", "Hair(Selena).fbx")]
+HAIRS += [{"name": n, "label": l, "fbx": "wetcat/" + f, "texture": "wetcat/tex.png", "alphaTest": False,
+           "license": "WetCat free hair pack (assets/ungrouped)"} for n, l, f in WETCAT]
+HAIRS += [{"name": "hair_dawn", "label": "Lang mit Pony (Dawn)", "fbx": "dawn/DawnHairFree_velvet/DawnHairFBX.fbx",
+           "texture": "dawn/unity/14.png", "alphaTest": True, "license": "Dawn Hair by velvet, free (assets/ungrouped)"}]
 # Bones whose skin hair may hang from: long hair reaches down the back.
 CARRIERS = {"Head", "Neck", "Spine2", "Spine1"}
 
@@ -71,6 +89,43 @@ def read_obj(path):
                     corners.append((int(p[0]) - 1, int(p[1]) - 1 if len(p) > 1 and p[1] else -1))
                 faces.append((group, material, corners))
     return np.asarray(v) @ AXES.T, np.asarray(vt), faces
+
+
+def read_fbx(path):
+    """Like read_obj (one group "hair"), plus the rig's head joint. Blender looks along -y, the model along +y."""
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.import_scene.fbx(filepath=path)
+    v, vt, faces = [], [], []
+    for o in bpy.data.objects:
+        if o.type != "MESH":
+            continue
+        m, base = o.data, len(v)
+        v += [list(o.matrix_world @ x.co) for x in m.vertices]
+        uv = m.uv_layers[0].data
+        for poly in m.polygons:
+            faces.append(("hair", None, [(base + m.loops[li].vertex_index, len(vt) + k)
+                                         for k, li in enumerate(poly.loop_indices)]))
+            vt += [list(uv[li].uv) for li in poly.loop_indices]
+    arm = [o for o in bpy.data.objects if o.type == "ARMATURE"][0]
+    flip = np.diag([-1.0, -1.0, 1.0])
+    joint = flip @ np.array(arm.matrix_world @ arm.data.bones["Head"].head_local)
+    return np.asarray(v) @ flip, np.asarray(vt), faces, joint
+
+
+def inner_shell(v, joint):
+    """The hair's innermost vertices over the skull: per direction from a point inside it (above the head joint), the
+    nearest one. Only directions above the forehead, so the bangs in front of the face stay out."""
+    cap = v[v[:, 2] > joint[2]]
+    centre = joint + [0, 0.02, 0.45 * (cap[:, 2].max() - joint[2])]
+    d = cap - centre
+    r = np.linalg.norm(d, axis=1)
+    elevation, azimuth = np.arcsin(d[:, 2] / r), np.arctan2(d[:, 1], d[:, 0])
+    bins = {}
+    for i in np.nonzero(elevation > np.radians(15))[0]:
+        key = (int(elevation[i] / np.radians(7.5)), int((azimuth[i] + np.pi) / np.radians(10)))
+        if key not in bins or r[i] < r[bins[key]]:
+            bins[key] = i
+    return cap[list(bins.values())]
 
 
 def select(faces, group, material=None):
@@ -165,25 +220,37 @@ def save(px, path):
     bpy.data.images.remove(img)
 
 
-def fit(spec, sex, body):
+def fit(spec, sex, body, source):
     meta, co, tris, dominant, eye_points = body
-    v, vt, faces = read_obj(os.path.join(ROOT, spec["obj"]))
-    head_faces = select(faces, *spec["head"])
-    head_idx = np.unique([i for c in head_faces for i, _ in c])
-    head = v[head_idx]
-    src_eyes = eye_centres(v[np.unique([i for c in select(faces, spec["eyes"]) for i, _ in c])])
-    dst_eyes = eye_centres(eye_points)
-
-    # 1. Eyes, then the skull (points above the eyes' lower edge).
-    s = np.linalg.norm(dst_eyes[1] - dst_eyes[0]) / np.linalg.norm(src_eyes[1] - src_eyes[0])
-    r, t = np.eye(3), (dst_eyes[0] + dst_eyes[1]) / 2 - s * (src_eyes[0] + src_eyes[1]) / 2
+    v, vt, faces, head, gap = source
     head_tris = tris[np.isin(dominant[tris], ["Head"]).all(1)]
     head_tree = bvh(co, head_tris)
-    skull = head[head[:, 2] > (src_eyes[0][2] + src_eyes[1][2]) / 2 - 0.02]
+    if "obj" in spec:
+        # 1. Eyes, then the skull (points above the eyes' lower edge).
+        src_eyes = eye_centres(v[np.unique([i for c in select(faces, spec["eyes"]) for i, _ in c])])
+        dst_eyes = eye_centres(eye_points)
+        s = np.linalg.norm(dst_eyes[1] - dst_eyes[0]) / np.linalg.norm(src_eyes[1] - src_eyes[0])
+        r, t = np.eye(3), (dst_eyes[0] + dst_eyes[1]) / 2 - s * (src_eyes[0] + src_eyes[1]) / 2
+        skull = head[head[:, 2] > (src_eyes[0][2] + src_eyes[1][2]) / 2 - 0.02]
+    else:
+        # 1. Head joints, scaled by the height of the skull over them; then the inner shell a few mm over the skull.
+        bone = [b for b in meta["bones"] if b["name"] == "Head"][0]
+        dst_joint = co[bone["head"]].mean(0) + np.array(bone.get("headOffset", [0, 0, 0]))
+        top = co[np.unique(head_tris)][:, 2].max()
+        s, r = (top + gap - dst_joint[2]) / (head[:, 2].max() - spec["joint"][2]), np.eye(3)
+        t = dst_joint - s * spec["joint"]
+        skull = head
     for _ in range(20):
         p = skull @ (s * r).T + t
-        q = np.array([head_tree.find_nearest(Vector(x))[0] for x in p])
-        ds, dr, dt = umeyama(p, q)
+        q = []
+        for x in p:
+            loc, n, _, _ = head_tree.find_nearest(Vector(x))
+            q.append(np.array(loc) + np.array(n) * gap)
+        q = np.array(q)
+        # Without a head the shell includes strands standing off the skull: the worst fifth is left out.
+        d = np.linalg.norm(p - q, axis=1)
+        keep = d <= np.percentile(d, 80 if gap else 100)
+        ds, dr, dt = umeyama(p[keep], q[keep])
         s, r, t = ds * s, dr @ r, ds * dr @ t + dt
     err = np.linalg.norm(skull @ (s * r).T + t - q, axis=1)
     log(sex, spec["name"], "aligned: scale %.3f, skull distance %.1f mm (median)" % (s, 1000 * np.median(err)))
@@ -197,9 +264,9 @@ def fit(spec, sex, body):
     hp = place(head)
     disp = np.zeros_like(hp)
     for i, x in enumerate(hp):
-        loc, _, _, dist = carrier.find_nearest(Vector(x), 0.05)
+        loc, n, _, dist = carrier.find_nearest(Vector(x), 0.05)
         if loc is not None:
-            disp[i] = np.array(loc) - x
+            disp[i] = np.array(loc) + np.array(n) * gap - x
     tree = kdtree(hp)
     near = [[j for _, j, _ in tree.find_n(x, 12)] for x in hp]
     for _ in range(6):
@@ -272,7 +339,7 @@ def atlas(spec, cells, grid, rows, sex):
     px = np.zeros((rows * cell, grid * cell, 4), np.float32)
     for cx, cy, diffuse, opacity in cells:
         rgb = pixels(os.path.join(ROOT, diffuse), (cell, cell))
-        a = pixels(os.path.join(ROOT, opacity), (cell, cell))[..., 0]
+        a = pixels(os.path.join(ROOT, opacity), (cell, cell))[..., 0] if opacity else rgb[..., 3]
         # Some packs ship near black hair, meant to be dyed by Character Creator's shader: it becomes a neutral grey
         # that keeps the strands' variation, so the creator's hair colours (which keep the luminance) work on it.
         lum = rgb[..., :3].mean(-1)
@@ -287,16 +354,29 @@ def atlas(spec, cells, grid, rows, sex):
     return rel
 
 
+def source(spec):
+    """Positions, uvs, faces, the head (points to align and to measure the displacement on) and the gap between that
+    head and the skin."""
+    if "obj" in spec:
+        v, vt, faces = read_obj(os.path.join(ROOT, spec["obj"]))
+        return v, vt, faces, v[np.unique([i for c in select(faces, *spec["head"]) for i, _ in c])], 0.0
+    v, vt, faces, spec["joint"] = read_fbx(os.path.join(ROOT, spec["fbx"]))
+    spec["parts"] = [("hair", None, spec["texture"], None)]
+    return v, vt, faces, inner_shell(v, spec["joint"]), 0.003
+
+
+sources = {spec["name"]: source(spec) for spec in HAIRS}
 for sex in ("female", "male"):
     body = read_body(sex)
     meta = body[0]
     names = {h["name"] for h in HAIRS}
     meta["assets"] = [a for a in meta["assets"] if a["name"] not in names]
     for spec in HAIRS:
-        cells, grid, rows = fit(spec, sex, body)
+        cells, grid, rows = fit(spec, sex, body, sources[spec["name"]])
         meta["assets"].append({"kind": "hair", "name": spec["name"], "file": "asset_" + spec["name"] + ".bin",
-                               "albedo": atlas(spec, cells, grid, rows, sex), "normal": None, "alphaTest": True,
-                               "label": spec["label"], "license": "see assets/ungrouped (Character Creator export)"})
+                               "albedo": atlas(spec, cells, grid, rows, sex), "normal": None,
+                               "alphaTest": spec.get("alphaTest", True), "label": spec["label"],
+                               "license": spec.get("license", "see assets/ungrouped (Character Creator export)")})
     with open(os.path.join(OUT, sex, "human.json"), "w") as f:
         json.dump(meta, f)
     log(sex, "done")

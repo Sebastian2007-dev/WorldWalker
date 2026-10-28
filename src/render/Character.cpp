@@ -233,7 +233,9 @@ bool Character::loadClips(const std::filesystem::path& dir) {
     }
     layers_.resize(clips_.size());
     for (size_t i = 0; i < layers_.size(); ++i) layers_[i].clip = int(i);
-    idle_ = findClip("idle");
+    // Standing Idle keeps the hands off the body (the old idle rests them on the hips, into the skin).
+    idle_ = findClip("standing_idle");
+    if (idle_ < 0) idle_ = findClip("idle");
     walk_ = findClip("walking");
     run_ = findClip("running");
     back_ = findClip("walking_backwards");

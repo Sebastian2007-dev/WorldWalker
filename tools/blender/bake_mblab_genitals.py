@@ -6,11 +6,13 @@
 # Per asset:
 #   1. The MakeHuman pelvis is aligned to the MB-Lab pelvis: hip and thigh joints first, then a similarity ICP on the
 #      skin around the crotch.
-#   2. Vertices lying on the skin are put onto the MB-Lab skin at the same height; the rest moves with the smoothed
-#      displacement between the two crotches. Slider morphs are rotated and scaled along.
+#   2. Vertices near the skin keep their signed height over it (the female's are sunk into it); the skin rim goes 1 mm
+#      under the MB-Lab skin. Vertices further out move with the smoothed displacement between the two crotches.
+#      Slider morphs are rotated and scaled along.
 #   3. Every vertex is bound to the nearest triangle of the pelvis and thighs and takes the MB-Lab skin's UVs there,
-#      so the asset samples the body's own skin texture (a "skin" asset). The body skin under it is hidden, except
-#      for a margin along the asset's edge.
+#      so the asset samples the body's own skin texture (a "skin" asset); vertices are split along the skin's uv seams.
+#      The body skin over the asset is hidden where the asset's rim closes the hole, and the rim is trimmed to a hem
+#      around that hole.
 import bpy, sys, os, json, struct
 import numpy as np
 from mathutils import Vector
@@ -112,6 +114,65 @@ def barycentric(p, a, b, c):
     return np.clip(np.array([1 - v - w, v, w]), 0, 1) / max(np.clip(np.array([1 - v - w, v, w]), 0, 1).sum(), 1e-9)
 
 
+def skin_uv(dst, rtri, bw):
+    return np.array([[dst["rv"]["u"][k], dst["rv"]["t"][k]] for k in rtri]).T @ bw
+
+
+def quads(dst):
+    """Face of each body triangle: the bake fans a quad into two consecutive triangles (a,b,c),(a,c,d), and the engine
+    joins them back (Human::subdivide). A hidden vertex hides all of its faces, both halves of a quad."""
+    rt, face = dst["rtris"], np.zeros(len(dst["rtris"]), np.int64)
+    i = f = 0
+    while i < len(rt):
+        face[i] = f
+        if i + 1 < len(rt) and rt[i + 1][0] == rt[i][0] and rt[i + 1][1] == rt[i][2]:
+            face[i + 1] = f
+            i += 1
+        i += 1
+        f += 1
+    return face
+
+
+def border_of(tris):
+    edges = {}
+    for tri in tris:
+        for k in range(3):
+            e = tuple(sorted((int(tri[k]), int(tri[(k + 1) % 3]))))
+            edges[e] = edges.get(e, 0) + 1
+    return np.unique([v for e, c in edges.items() if c == 1 for v in e]).astype(np.int64)
+
+
+def hidden_skin(dst, placed, atris, border, margin=0.006):
+    """Body vertices under the asset. Parts of the asset lie below the skin (the female's are sunk up to 15 mm into
+    it), so 'under' means: the line along the body normal meets the asset at least `margin` inside its border. The
+    engine hides every face around a hidden vertex, so a vertex is hidden only when its neighbours are covered too;
+    the hole then stays inside the asset's skin rim."""
+    dco, tris = dst["co"], dst["tris"]
+    fn = np.cross(dco[tris[:, 1]] - dco[tris[:, 0]], dco[tris[:, 2]] - dco[tris[:, 0]])
+    vn = np.zeros_like(dco)
+    for k in range(3):
+        np.add.at(vn, tris[:, k], fn)
+    vn /= np.maximum(np.linalg.norm(vn, axis=1), 1e-12)[:, None]
+    asset = BVHTree.FromPolygons([Vector(x) for x in placed], [tuple(map(int, x)) for x in atris])
+    border_tree = kdtree(placed[border])
+    lo, hi = placed.min(0) - 0.03, placed.max(0) + 0.03
+    candidates = np.nonzero(((dco > lo) & (dco < hi)).all(1))[0]
+    covered = np.zeros(len(dco), bool)
+    for i in candidates:
+        o, n = Vector(dco[i] - vn[i] * 0.03), Vector(vn[i])
+        loc = asset.ray_cast(o, n, 0.06)[0]
+        covered[i] = loc is not None and border_tree.find(loc)[2] > margin
+    face = quads(dst)
+    corners = [set() for _ in range(face.max() + 1)]
+    for f, t in zip(face, tris):
+        corners[f].update(int(a) for a in t)
+    neighbours = [set() for _ in dco]
+    for c in corners:
+        for a in c:
+            neighbours[a].update(c)
+    return [int(i) for i in candidates if covered[i] and all(covered[j] for j in neighbours[i])]
+
+
 def transfer(entry, src, dst, sex):
     pv, atris, scaled, scale, deleted, morphs = read_asset(os.path.join(MH, entry["file"]))
     co = src["co"]
@@ -120,7 +181,6 @@ def transfer(entry, src, dst, sex):
     if scaled:
         s3 = np.array([abs(co[a][k] - co[b][k]) / ref for k, (a, b, ref) in enumerate(scale)])
     p = (co[pv["r"]] * pv["w"][..., None]).sum(1) + pv["o"] * s3
-    height = np.linalg.norm(pv["o"] * s3, axis=1)  # distance from the skin it hangs from
 
     # 1. Hip and knee joints, then ICP on the MakeHuman skin around the asset (the hidden skin left out).
     keys = ("LeftUpLeg", "RightUpLeg", "LeftLeg", "RightLeg")  # hip and knee joints mean the same on both bodies
@@ -152,16 +212,29 @@ def transfer(entry, src, dst, sex):
     near = [[j for _, j, _ in tree.find_n(y, 10)] for y in rp]
     for _ in range(5):
         disp = np.array([disp[n].mean(0) for n in near])
-    placed = []
-    for x, h in zip(p @ (s * r).T + t, height):
-        nb = tree.find_n(x, 8)
+    def field(y):
+        nb = tree.find_n(y, 8)
         w = np.array([1.0 / max(d, 1e-4) for _, _, d in nb])
-        x = x + (disp[[j for _, j, _ in nb]] * w[:, None]).sum(0) / w.sum()
-        if h < 0.002:  # on the skin: onto the MB-Lab skin, at its height above the MakeHuman skin
-            loc, n, _, _ = tree_dst.find_nearest(Vector(x))
-            x = np.array(loc) + np.array(n) * h * s
-        placed.append(x)
-    placed = np.array(placed)
+        return y + (disp[[j for _, j, _ in nb]] * w[:, None]).sum(0) / w.sum()
+
+    # Close to the skin a vertex keeps its signed height over it: its nearest point on the MakeHuman skin (the hidden
+    # part included) moves with the field onto the MB-Lab skin, and the height is laid off along the normal there.
+    # Further out the nearest skin point jumps between pubis and thighs, so those vertices just move with the field.
+    tree_src = BVHTree.FromPolygons([Vector(x) for x in co], [tuple(map(int, x)) for x in src["tris"]])
+    placed, heights = [], []
+    for x in p:
+        loc, n, _, _ = tree_src.find_nearest(Vector(x))
+        h = (x - np.array(loc)) @ np.array(n)
+        heights.append(h)
+        loc, n, _, _ = tree_dst.find_nearest(Vector(field(np.array(loc) @ (s * r).T + t)))
+        # The skin rim (within 2 mm of the MakeHuman skin) lies 1 mm under the MB-Lab skin: where the body shows it
+        # covers the rim, and in the hole cut for the asset the rim takes the body's normal and texture (render/Human),
+        # so no edge shows. A rim on the skin flickers with it (and TAA blends the two into a pale veil).
+        lay = np.clip((abs(h) - 0.002) / 0.002, 0, 1)
+        near_skin = np.array(loc) + np.array(n) * ((1 - lay) * -0.001 + lay * h * s)
+        b = np.clip((abs(h) - 0.005) / 0.01, 0, 1)
+        placed.append((1 - b) * near_skin + b * field(x @ (s * r).T + t))
+    placed, heights = np.array(placed), np.abs(heights)
 
     # 3. Binding, the skin's uvs, morphs, hidden skin.
     out = []
@@ -169,36 +242,62 @@ def transfer(entry, src, dst, sex):
         loc, _, fi, _ = tree_dst.find_nearest(Vector(x))
         tri, rtri = carrier_tris[fi], carrier_rtris[fi]
         bw = barycentric(np.array(loc), *dco[tri])
-        uv = np.array([[dst["rv"]["u"][k], dst["rv"]["t"][k]] for k in rtri]).T @ bw
-        out.append((tri, bw, (x - dco[tri].T @ bw) / 0.1, uv))
-    # Trim the skin border the asset brings along: it was cut for MakeHuman's groin and folds over MB-Lab's. What stays
-    # is the part standing out of the skin plus a margin (the whole asset if nothing stands out).
-    core = placed[height > 0.0015] if (height > 0.0015).sum() > 10 else placed
-    core_tree = kdtree(core)
-    keep_v = np.array([core_tree.find(x)[2] < 0.025 for x in placed])
-    atris = atris[keep_v[atris].all(1)]
+        out.append((tri, bw, (x - dco[tri].T @ bw) / 0.1, skin_uv(dst, rtri, bw)))
+    # Hide the body skin under the asset, then trim the skin rim to a hem around that hole and the parts standing out
+    # of the skin or sunk into it: the rest lies hidden under the body anyway and could poke through it in creases.
+    hide = hidden_skin(dst, placed, atris, border_of(atris))
+    face = quads(dst)
+    hole = np.isin(face, face[np.isin(dst["tris"], hide).any(1)])
+    g = np.linspace(0, 1, 6)
+    bary = np.array([(a, b, 1 - a - b) for a in g for b in g if a + b <= 1])
+    needed = np.concatenate([np.einsum("kj,tjc->tkc", bary, dco[dst["tris"][hole]]).reshape(-1, 3),
+                             placed[heights > 0.002]])
+    if len(needed):
+        needed_tree = kdtree(needed)
+        keep_v = np.array([needed_tree.find(x)[2] < 0.01 for x in placed])
+        atris = atris[keep_v[atris].any(1)]
     used = np.unique(atris)
     remap = np.full(len(placed), -1)
     remap[used] = np.arange(len(used))
     atris = remap[atris]
     placed, out = placed[used], [out[i] for i in used]
+
+    # The groin lies on uv seams of MB-Lab's skin. A triangle across one would sample the empty atlas between the two
+    # sides: its corners far (in uv) from the middle one get a copy with uvs from the body's triangles around that one
+    # in the atlas (bound to the body like the original).
+    carrier_uv = np.array([skin_uv(dst, rt, np.full(3, 1 / 3)) for rt in carrier_rtris])
+    copies, source, charts = {}, [], {}
+    for k, tri in enumerate(atris):
+        uvs = np.array([out[v][3] for v in tri])
+        ref = int(np.argmin(np.abs(uvs - np.median(uvs, 0)).sum(1)))
+        for j, v in enumerate(tri):
+            if np.abs(uvs[j] - uvs[ref]).max() < 0.03:
+                continue
+            chart = tuple(np.round(uvs[ref] / 0.02).astype(int))  # cells of the atlas
+            if chart not in charts:
+                sel = np.nonzero(np.abs(carrier_uv - np.array(chart) * 0.02).max(1) < 0.06)[0]
+                charts[chart] = (sel, BVHTree.FromPolygons([Vector(x) for x in dco],
+                                                           [tuple(map(int, x)) for x in carrier_tris[sel]]))
+            if (v, chart) not in copies:
+                sel, tree_chart = charts[chart]
+                loc, _, fi, _ = tree_chart.find_nearest(Vector(placed[v]))
+                bw = barycentric(np.array(loc), *dco[carrier_tris[sel[fi]]])
+                copies[(v, chart)] = len(out)
+                out.append(out[v][:3] + (skin_uv(dst, carrier_rtris[sel[fi]], bw),))
+                source.append(v)
+            atris[k, j] = copies[(v, chart)]
+    log(sex, entry["name"], len(source), "vertices copied along uv seams")
     rot = s * r
     new_morphs = {}
     for name, (idx, d) in morphs.items():
         if name.startswith("body:"):
             continue  # moves MakeHuman body vertices
         sel = remap[idx] >= 0
-        new_morphs[name] = (remap[idx][sel], ((d * s3) @ rot.T / 0.1)[sel])
-    edges = {}
-    for tri in atris:
-        for k in range(3):
-            e = tuple(sorted((int(tri[k]), int(tri[(k + 1) % 3]))))
-            edges[e] = edges.get(e, 0) + 1
-    border = np.unique([v for e, c in edges.items() if c == 1 for v in e])
-    asset_tree, border_tree = kdtree(placed), kdtree(placed[border])
-    near_body = np.unique(carrier_tris)
-    hide = [int(i) for i in near_body
-            if asset_tree.find(dco[i])[2] < 0.004 and border_tree.find(dco[i])[2] > 0.015]
+        idx, d = remap[idx][sel], ((d * s3) @ rot.T / 0.1)[sel]
+        at = {int(i): k for k, i in enumerate(idx)}
+        extra = [(len(placed) + c, at[v]) for c, v in enumerate(source) if v in at]
+        new_morphs[name] = (np.concatenate([idx, [c for c, _ in extra]]).astype(np.int64),
+                            np.concatenate([d, d[[k for _, k in extra]].reshape(-1, 3)]))
     path = os.path.join(OUT, sex, entry["file"])
     with open(path, "wb") as f:
         f.write(struct.pack("<I", len(out)))
