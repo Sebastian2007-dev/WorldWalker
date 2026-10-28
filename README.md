@@ -24,7 +24,7 @@ To rebake it (Python 3 with Pillow and NumPy, Blender 5), then publish a new ver
 
 ```powershell
 python tools\install_asset_packs.py
-& "C:\Program Files\Blender Foundation\Blender 5.2lender.exe" -b --python toolslenderake_mblab_proxies.py -- assetsaked\human assetsaked\mblab
+& "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b --python tools\blender\bake_mblab_proxies.py -- assets\baked\human assets\baked\mblab
 python tools\pack_wardrobe.py 2
 ```
 
