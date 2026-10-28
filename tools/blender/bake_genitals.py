@@ -454,7 +454,7 @@ def main():
     if not entries:
         raise SystemExit("nothing to bake: open a .blend with genitals_* objects or pass --placeholder / --proxy")
     meta_path = os.path.join(OUT, "human.json")
-    meta = json.load(open(meta_path))
+    meta = json.load(open(meta_path, encoding="utf-8"))
     names = {e["name"] for e in entries}
     meta["assets"] = [a for a in meta["assets"] if a["name"] not in names] + entries
     with open(meta_path, "w") as f:

@@ -212,7 +212,7 @@ def select(faces, group, material=None):
 
 def read_body(sex):
     d = os.path.join(OUT, sex)
-    meta = json.load(open(os.path.join(d, "human.json")))
+    meta = json.load(open(os.path.join(d, "human.json"), encoding="utf-8"))
     b = open(os.path.join(d, "base.bin"), "rb").read()
     o = 0
 

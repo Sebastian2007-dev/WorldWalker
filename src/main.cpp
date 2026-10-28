@@ -23,6 +23,7 @@
 #include "gfx/Device.h"
 #include "gfx/Pipeline.h"
 #include "render/Renderer.h"
+#include "ui/Lang.h"
 #include "ui/Ui.h"
 #include "ui/CharacterCreator.h"
 #include "world/Grass.h"
@@ -59,6 +60,8 @@ int main(int argc, char** argv) {
     double startLat = 47.8740, startLon = 8.0040;
     bool validation = false;
     const char* shotPath = nullptr;   // --shot: render until the world is loaded, save PNG, exit
+    float viewDistance = 0.0f;        // --view-distance <m>: overrides the setting (checks)
+    const char* language = nullptr;   // --lang de|en: overrides the setting (checks)
     float yaw = 0, pitch = 0, shotTime = 10.5f;
     bool creatorRequested = false;
     const char* creatorTemplate = nullptr;
@@ -97,6 +100,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--validation")) validation = true;
         else if (!std::strcmp(argv[i], "--noshadows")) noShadows = true;
         else if (!std::strcmp(argv[i], "--nograss")) noGrass = true;
+        else if (!std::strcmp(argv[i], "--view-distance") && i + 1 < argc) viewDistance = float(std::atof(argv[++i]));
+        else if (!std::strcmp(argv[i], "--lang") && i + 1 < argc) language = argv[++i];
         else if (!std::strcmp(argv[i], "--notaa")) noTaa = true;
         else if (!std::strcmp(argv[i], "--nossao")) noSsao = true;
         else if (!std::strcmp(argv[i], "--clouds") && i + 1 < argc) clouds = float(std::atof(argv[++i]));
@@ -275,6 +280,11 @@ int main(int argc, char** argv) {
     if (shotPath || timeGiven) params.timeOfDay = shotTime;
     if (noShadows) params.shadows = false;
     if (noGrass) params.grass = false;
+    if (viewDistance > 0.0f) params.viewDistance = viewDistance;
+    if (language) {
+        settings.language = std::strcmp(language, "en") ? "de" : "en";
+        ui::setLanguage(settings.language == "en" ? ui::Language::English : ui::Language::German);
+    }
     if (noTaa) params.taa = false;
     if (noSsao) params.ssao = false;
     if (clouds >= 0.0f) params.cloudCoverage = clouds;

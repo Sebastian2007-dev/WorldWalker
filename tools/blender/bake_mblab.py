@@ -43,50 +43,63 @@ EYE_COLORS = {"blue": (0.27, 0.45, 0.72), "bluegreen": (0.24, 0.52, 0.52), "brow
 
 
 # Detail sliders: the creator's groups for MB-Lab's categories, and German words for the parts of property names
-# ("Nose_NostrilSizeZ" -> "Nase: Nasenloch HÃ¶he").
+# ("Nose_NostrilSizeZ" -> "Nase: Nasenloch Höhe").
 GROUPS = {"Abdomen": "stomach", "Armpit": "arms", "Arms": "arms", "Body": "torso", "Cheeks": "cheek", "Chest": "torso",
           "Chin": "chin", "Ears": "ears", "Elbows": "arms", "Eyebrows": "eyebrows", "Eyelids": "eyes", "Eyes": "eyes",
           "Face": "head", "Feet": "feet", "Forehead": "forehead", "Hands": "hands", "Head": "head", "Jaw": "chin",
           "Legs": "legs", "Mouth": "mouth", "Neck": "neck", "Nose": "nose", "Pelvis": "pelvis", "Shoulders": "torso",
           "Stomach": "stomach", "Torso": "torso", "Waist": "stomach", "Wrists": "arms"}
-WORDS = {"Abdomen": "Bauch", "Armpit": "Achsel", "Arms": "Arme", "Body": "KÃ¶rper", "Cheeks": "Wangen", "Chest": "Brustkorb",
+WORDS = {"Abdomen": "Bauch", "Armpit": "Achsel", "Arms": "Arme", "Body": "Körper", "Cheeks": "Wangen", "Chest": "Brustkorb",
          "Chin": "Kinn", "Ears": "Ohren", "Elbows": "Ellbogen", "Eyebrows": "Brauen", "Eyelids": "Lider", "Eyes": "Augen",
-         "Face": "Gesicht", "Feet": "FÃ¼ÃŸe", "Forehead": "Stirn", "Hands": "HÃ¤nde", "Head": "Kopf", "Jaw": "Kiefer",
+         "Face": "Gesicht", "Feet": "Füße", "Forehead": "Stirn", "Hands": "Hände", "Head": "Kopf", "Jaw": "Kiefer",
          "Legs": "Beine", "Mouth": "Mund", "Neck": "Hals", "Nose": "Nase", "Pelvis": "Becken", "Shoulders": "Schultern",
          "Stomach": "Bauch", "Torso": "Rumpf", "Waist": "Taille", "Wrists": "Handgelenke",
-         "Size": "GrÃ¶ÃŸe", "Pos": "Position", "Loc": "Position", "Rot": "Drehung", "Scale": "GrÃ¶ÃŸe", "Mass": "Masse",
-         "Tone": "Straffheit", "Length": "LÃ¤nge", "Girth": "Umfang", "Angle": "Winkel", "Angle2": "Winkel 2",
-         "Curve": "KrÃ¼mmung", "Volume": "Volumen", "Prominence": "AusprÃ¤gung", "Crease": "Falte", "Diam": "Durchmesser",
-         "Breast": "Brust", "Aureola": "Warzenhof", "Nipple": "Brustwarze", "Belly": "Bauch", "Gluteus": "GesÃ¤ÃŸ",
+         "Size": "Größe", "Pos": "Position", "Loc": "Position", "Rot": "Drehung", "Scale": "Größe", "Mass": "Masse",
+         "Tone": "Straffheit", "Length": "Länge", "Girth": "Umfang", "Angle": "Winkel", "Angle2": "Winkel 2",
+         "Curve": "Krümmung", "Volume": "Volumen", "Prominence": "Ausprägung", "Crease": "Falte", "Diam": "Durchmesser",
+         "Breast": "Brust", "Aureola": "Warzenhof", "Nipple": "Brustwarze", "Belly": "Bauch", "Gluteus": "Gesäß",
          "Upperarm": "Oberarm", "Forearm": "Unterarm", "Upperleg": "Oberschenkel", "Upperlegs": "Oberschenkel",
          "Lowerleg": "Unterschenkel", "Lowerlegs": "Unterschenkel", "Thigh": "Oberschenkel", "Calf": "Wade",
-         "Knee": "Knie", "Ankle": "KnÃ¶chel", "Heel": "Ferse", "Width": "Breite", "Fingers": "Finger", "Tip": "Spitze",
-         "Inter": "Zwischen", "Dist": "Abstand", "Nails": "NÃ¤gel", "Palm": "HandflÃ¤che", "Lobe": "OhrlÃ¤ppchen",
-         "Round": "Rundung", "Cleft": "GrÃ¼bchen", "Nostril": "Nasenloch", "Septum": "Septum", "Flat": "flach",
-         "Rolled": "gerollt", "Wing": "NasenflÃ¼gel", "Back": "hinten", "Bump": "HÃ¶cker", "Ball": "Nasenkuppe",
-         "Base": "Basis", "Bridge": "RÃ¼cken", "Glabella": "Nasenwurzel", "Shape": "Form", "Lowerlip": "Unterlippe",
+         "Knee": "Knie", "Ankle": "Knöchel", "Heel": "Ferse", "Width": "Breite", "Fingers": "Finger", "Tip": "Spitze",
+         "Inter": "Zwischen", "Dist": "Abstand", "Nails": "Nägel", "Palm": "Handfläche", "Lobe": "Ohrläppchen",
+         "Round": "Rundung", "Cleft": "Grübchen", "Nostril": "Nasenloch", "Septum": "Septum", "Flat": "flach",
+         "Rolled": "gerollt", "Wing": "Nasenflügel", "Back": "hinten", "Bump": "Höcker", "Ball": "Nasenkuppe",
+         "Base": "Basis", "Bridge": "Rücken", "Glabella": "Nasenwurzel", "Shape": "Form", "Lowerlip": "Unterlippe",
          "Upperlip": "Oberlippe", "Ext": "Kontur", "Philtrum": "Philtrum", "Protusion": "Vorstehen",
-         "Corners": "Mundwinkel", "Side": "seitlich", "Zygom": "Wangenknochen", "Infra": "unter", "Bag": "TrÃ¤nensack",
-         "Inner": "innen", "Outer": "auÃŸen", "Middle": "Mitte", "Lower": "unten", "Upper": "oben", "Type": "Typ",
+         "Corners": "Mundwinkel", "Side": "seitlich", "Zygom": "Wangenknochen", "Infra": "unter", "Bag": "Tränensack",
+         "Inner": "innen", "Outer": "außen", "Middle": "Mitte", "Lower": "unten", "Upper": "oben", "Type": "Typ",
          "Almond": "Mandel", "Hooded": "Schlupflid", "Sinus": "Winkel", "Crosscalibration": "Ausrichtung",
-         "Iris": "Iris", "Droop": "HÃ¤ngen", "Ridge": "Brauenbogen", "Temple": "SchlÃ¤fen", "Cranium": "SchÃ¤del",
-         "Dolichocephalic": "lang", "Pentagonoides": "fÃ¼nfeckig", "Platycephalus": "flach", "Nucha": "Nacken",
-         "Ellipsoid": "oval", "Parallelepiped": "eckig", "Triangle": "dreieckig", "Collarbone": "SchlÃ¼sselbein",
-         "Trapezious": "Trapezmuskel", "Toracic": "Brustkorb", "Vshape": "V-Form", "Dorsi": "RÃ¼ckenmuskel",
+         "Iris": "Iris", "Droop": "Hängen", "Ridge": "Brauenbogen", "Temple": "Schläfen", "Cranium": "Schädel",
+         "Dolichocephalic": "lang", "Pentagonoides": "fünfeckig", "Platycephalus": "flach", "Nucha": "Nacken",
+         "Ellipsoid": "oval", "Parallelepiped": "eckig", "Triangle": "dreieckig", "Collarbone": "Schlüsselbein",
+         "Trapezious": "Trapezmuskel", "Toracic": "Brustkorb", "Vshape": "V-Form", "Dorsi": "Rückenmuskel",
          "Local": "lokal", "Fat": "Fett", "Crotch": "Schritt", "Bow": "O-Bein", "In": "innen", "Lateral": "seitlich",
-         "Two": "2", "X": "Breite", "Y": "Tiefe", "Z": "HÃ¶he", "X2": "Breite 2"}
+         "Two": "2", "X": "Breite", "Y": "Tiefe", "Z": "Höhe", "X2": "Breite 2"}
+
+
+# English labels: MB-Lab's own words, abbreviations spelled out.
+ENGLISH = {"Pos": "position", "Loc": "position", "Rot": "rotation", "Diam": "diameter", "X": "width", "Y": "depth",
+           "Z": "height", "X2": "width 2", "Dist": "distance", "Ext": "contour", "Zygom": "cheekbone", "Infra": "under",
+           "Toracic": "thoracic", "Trapezious": "trapezius", "Protusion": "protrusion", "Aureola": "areola",
+           "Crosscalibration": "alignment", "Inter": "between", "Two": "2", "Upperarm": "upper arm",
+           "Upperleg": "thigh", "Upperlegs": "thighs", "Lowerleg": "lower leg", "Lowerlegs": "lower legs",
+           "Lowerlip": "lower lip", "Upperlip": "upper lip", "Vshape": "V shape", "Dorsi": "latissimus",
+           "Nucha": "nape", "Bow": "bow legs", "Gluteus": "buttocks", "Angle2": "angle 2"}
 
 
 def slider(prop):
-    """Creator detail slider for an MB-Lab property (-1..1 maps to 0..1, neutral 0.5)."""
+    """Creator detail slider for an MB-Lab property (-1..1 maps to 0..1, neutral 0.5), labelled in German and English."""
     import re
     category, part = prop.split("_", 1)
     tokens = re.findall(r"[A-Z][a-z]+\d?|[A-Z]\d?|[a-z]+\d?|\d+", part)
     words = [WORDS.get(t, WORDS.get(t.capitalize(), t)) for t in tokens]
+    english = " ".join(ENGLISH.get(t, t.lower()) for t in tokens)
     size = any(t in ("Size", "Scale", "Length", "Girth", "Volume", "Diam", "Mass", "X", "Y", "Z") for t in tokens)
     return {"group": GROUPS.get(category, category.lower()), "name": prop, "prop": prop,
+            "labelEn": category + ": " + english[:1].upper() + english[1:],
+            "loEn": "smaller" if size else "less", "hiEn": "larger" if size else "more",
             "label": WORDS.get(category, category) + ": " + " ".join(words),
-            "lo": "kleiner" if size else "weniger", "hi": "grÃ¶ÃŸer" if size else "mehr"}
+            "lo": "kleiner" if size else "weniger", "hi": "größer" if size else "mehr"}
 
 
 def log(*a):

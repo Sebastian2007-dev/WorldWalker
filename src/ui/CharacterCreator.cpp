@@ -1,6 +1,7 @@
 ﻿#include "ui/CharacterCreator.h"
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include <imgui.h>
+#include "ui/Lang.h"
 #include "ui/Theme.h"
 #include <algorithm>
 #include <cctype>
@@ -21,6 +22,13 @@ std::string lower(std::string s) {
     return s;
 }
 const char* groupLabel(const std::string& group) {
+    static const std::map<std::string,const char*> en={
+        {"arms","Arms"},{"legs","Legs"},{"torso","Upper body"},{"head","Head shape"},
+        {"chin","Chin & jaw"},{"eyes","Eyes"},{"nose","Nose"},{"mouth","Mouth"},
+        {"ears","Ears"},{"neck","Neck"},{"cheek","Cheeks"},{"forehead","Forehead"},
+        {"eyebrows","Eyebrows"},{"breast","Breasts"},{"hip","Hips"},{"hips","Hips"},{"buttocks","Buttocks"},
+        {"hands","Hands"},{"feet","Feet"},{"stomach","Stomach"},{"pelvis","Pelvis"}};
+    if(english()) { auto it=en.find(group); return it==en.end()?nullptr:it->second; }
     static const std::map<std::string,const char*> names={
         {"arms","Arme"},{"legs","Beine"},{"torso","Oberkörper"},{"head","Kopfform"},
         {"chin","Kinn & Kiefer"},{"eyes","Augen"},{"nose","Nase"},{"mouth","Mund"},
@@ -32,7 +40,9 @@ const char* groupLabel(const std::string& group) {
 
 // MakeHuman modifier names ("nose-trans-down-up") as German labels with the words for both slider ends.
 struct DetailText { std::string label; std::string lo, hi; };
+DetailText detailTextEnglish(const std::string& name);
 DetailText detailText(const std::string& name) {
+    if(english()) return detailTextEnglish(name);
     static const std::map<std::string,std::pair<const char*,const char*>> ranges={
         {"decr-incr",{"weniger","mehr"}},{"down-up",{"runter","hoch"}},{"in-out",{"innen","außen"}},
         {"backward-forward",{"zurück","vor"}},{"concave-convex",{"konkav","konvex"}},
@@ -97,11 +107,68 @@ DetailText detailText(const std::string& name) {
     return out;
 }
 
-std::string skinLabel(const std::string& name) {
+// The same in English: the name's words, abbreviations spelled out.
+DetailText detailTextEnglish(const std::string& name) {
+    static const std::map<std::string,std::pair<const char*,const char*>> ranges={
+        {"decr-incr",{"less","more"}},{"down-up",{"down","up"}},{"in-out",{"in","out"}},
+        {"backward-forward",{"back","forward"}},{"concave-convex",{"concave","convex"}},
+        {"compress-uncompress",{"compressed","stretched"}},{"square-round",{"square","round"}},
+        {"pointed-triangle",{"pointed","triangular"}}};
     static const std::map<std::string,const char*> words={
+        {"lowerarm","lower arm"},{"upperarm","upper arm"},{"upperleg","thigh"},{"upperlegs","thighs"},
+        {"lowerleg","lower leg"},{"lowerlegs","lower legs"},{"leg","legs"},{"horiz","width"},{"vert","height"},
+        {"circ","circumference"},{"rot","rotation"},{"dist","distance"},{"corner1","eye corner 1"},
+        {"corner2","eye corner 2"},{"push1","lid 1"},{"push2","lid 2"},{"eyefold","eyelid fold"},{"bag","eye bag"},
+        {"width1","width top"},{"width2","width middle"},{"width3","width bottom"},{"prognathism","underbite"},
+        {"invertedtriangular","inverted triangle"},{"valgus","knock knees"},{"lowerlip","lower lip"},
+        {"upperlip","upper lip"},{"cupidsbow","Cupid's bow"},{"angles","mouth corners"},{"ext","contour"},
+        {"double","double chin"},{"flaring","nostril flare"},{"septumangle","septum angle"},{"tone","firmness"},
+        {"pregnant","pregnancy"},{"pectoral","pectorals"},{"dorsi","back muscles"},{"napetowaist","nape to waist"},
+        {"waisttohip","waist to hip"},{"vshape","V shape"},{"frontchest","chest width"},{"age","ageing"}};
+    static const std::set<std::string> stems={"nose","ear","eye","eyes","mouth","head","neck","hip","foot","hand","cheek",
+        "chin","forehead","torso","stomach","pelvis","buttocks","breast","eyebrows"};
+    static const std::set<std::string> sizes={"scale","depth","horiz","vert","length","circ","height","width","dist",
+        "volume","distance","diameter","width1","width2","width3"};
+    std::vector<std::string> tokens;
+    for(size_t start=0;start<=name.size();) {
+        size_t end=name.find('-',start); if(end==std::string::npos) end=name.size();
+        tokens.push_back(name.substr(start,end-start)); start=end+1;
+    }
+    DetailText out;
+    std::string range;
+    if(tokens.size()>=3) {
+        range=tokens[tokens.size()-2]+"-"+tokens.back();
+        if(auto r=ranges.find(range); r!=ranges.end()) { out.lo=r->second.first; out.hi=r->second.second; tokens.resize(tokens.size()-2); }
+        else range.clear();
+    }
+    if(tokens.size()>1 && stems.count(tokens[0])) tokens.erase(tokens.begin());
+    std::erase(tokens,std::string("measure"));
+    bool size=false;
+    for(auto& t:tokens) size|=sizes.count(t)>0;
+    if(range=="decr-incr" && size) { out.lo="smaller"; out.hi="larger"; }
+    for(size_t i=0;i<tokens.size();++i) {
+        std::string word;
+        if(tokens[i]=="trans") word=range=="down-up"?"vertical position":range=="in-out"?"sideways position":"front/back position";
+        else if(tokens[i]=="scale" && i+1<tokens.size() && sizes.count(tokens[i+1])) continue;
+        else if(auto w=words.find(tokens[i]); w!=words.end()) word=w->second;
+        else word=tokens[i];
+        out.label+=(out.label.empty()?"":" ")+word;
+    }
+    if(out.label.empty()) out.label=name;
+    out.label[0]=char(std::toupper(static_cast<unsigned char>(out.label[0])));
+    return out;
+}
+
+std::string skinLabel(const std::string& name) {
+    static const std::map<std::string,const char*> en={
+        {"young","Young"},{"middleage","Middle-aged"},{"old","Old"},{"african","African"},{"asian","Asian"},
+        {"caucasian","European"},{"female","female"},{"male","male"},{"female2","female (variant 2)"},
+        {"male2","male (variant 2)"},{"special","with suit"},{"latino","Latin American"}};
+    static const std::map<std::string,const char*> de={
         {"young","Jung"},{"middleage","Mittleres Alter"},{"old","Alt"},{"african","afrikanisch"},{"asian","asiatisch"},
         {"caucasian","europäisch"},{"female","weiblich"},{"male","männlich"},{"female2","weiblich (Variante 2)"},
-        {"male2","männlich (Variante 2)"},{"special","mit Anzug"}};
+        {"male2","männlich (Variante 2)"},{"special","mit Anzug"},{"latino","lateinamerikanisch"}};
+    const auto& words=english()?en:de;
     std::string out; size_t start=0;
     while(start<=name.size()) {
         size_t end=name.find('_',start); if(end==std::string::npos) end=name.size();
@@ -154,15 +221,15 @@ std::string assetLabel(const std::string& name) {
         {"clothes_male_elegantsuit01","Anzug"},{"clothes_male_worksuit01","Arbeitskleidung"}};
     if(auto it=names.find(name); it!=names.end()) {
         // Both templates offer every outfit; the cut is part of the name.
-        if(name.rfind("clothes_female_",0)==0) return it->second+std::string(" (Damen)");
-        if(name.rfind("clothes_male_",0)==0) return it->second+std::string(" (Herren)");
-        return it->second;
+        if(name.rfind("clothes_female_",0)==0) return tr(it->second)+tr(std::string(" (Damen)"));
+        if(name.rfind("clothes_male_",0)==0) return tr(it->second)+tr(std::string(" (Herren)"));
+        return tr(it->second);
     }
     auto digits=name.find_last_not_of("0123456789");
     std::string number=digits+1<name.size()?std::to_string(std::stoi(name.substr(digits+1))):"";
-    if(name.rfind("eyebrows_",0)==0) return "Augenbrauen "+number;
-    if(name.rfind("eyelashes_",0)==0) return "Wimpern "+number;
-    if(name.rfind("clothes_shoes",0)==0) return "Schuhe "+number;
+    if(name.rfind("eyebrows_",0)==0) return tr(std::string("Augenbrauen "))+number;
+    if(name.rfind("eyelashes_",0)==0) return tr(std::string("Wimpern "))+number;
+    if(name.rfind("clothes_shoes",0)==0) return tr(std::string("Schuhe "))+number;
     return label(name.substr(name.find('_')+1));
 }
 bool isShoes(const std::string& name) { return name.rfind("clothes_shoes",0)==0; }
@@ -190,10 +257,10 @@ bool picker(const char* text, const char* id, const std::vector<std::string>& en
 // One asset slot (hair style, shoes, ...): every catalog asset accepted by `matches`, optionally "Keine".
 template<class Match> bool assetSlot(render::Human& human, const char* text, const char* id, Match matches, bool none) {
     std::vector<std::string> names, entries;
-    if(none) { names.push_back(""); entries.push_back("Keine"); }
+    if(none) { names.push_back(""); entries.push_back(tr("Keine")); }
     for(auto& a:human.catalog()["assets"]) {
         std::string name=a["name"];
-        if(matches(name)) { names.push_back(name); entries.push_back(a.value("label",assetLabel(name))); }
+        if(matches(name)) { names.push_back(name); entries.push_back(a.contains("label")?tr(a["label"].get<std::string>()):assetLabel(name)); }
     }
     if(names.empty() || (none && names.size()==1)) return false;
     // Alphabetical, so related styles ("Bob, ...") sit together; "Keine" stays first.
@@ -327,7 +394,9 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
         if(genitals) {
             theme::section("INTIMBEREICH");
             if(assetSlot(human,"Genitalien","genitals",[](const std::string& n) { return n.rfind("genitals_",0)==0; },true)) dirty_=true;
-            static const std::map<std::string,std::string> names={{"length","Länge"},{"circ","Umfang"},{"testicles","Hoden"}};
+            static const std::map<std::string,std::string> de={{"length","Länge"},{"circ","Umfang"},{"testicles","Hoden"}},
+                en={{"length","Length"},{"circ","Girth"},{"testicles","Testicles"}};
+            const auto& names=english()?en:de;
             for(auto& a:catalog["assets"]) {
                 if(a["kind"]!="genitals") continue;
                 bool chosen=false;
@@ -350,14 +419,18 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
     } else if(tab_==1) {
         ImGui::Dummy(ImVec2(0,S(6)));
         ImGui::SetNextItemWidth(width);
-        ImGui::InputTextWithHint("##filter","Details suchen ...",filter_,sizeof(filter_));
+        ImGui::InputTextWithHint("##filter",tr("Details suchen ..."),filter_,sizeof(filter_));
         theme::muted("Rechtsklick auf einen Regler setzt ihn zurück.");
         auto& details=state["details"];
         std::string query=lower(filter_);
         auto group=[&](const std::string& g) {
             std::vector<std::pair<const nlohmann::json*,DetailText>> rows;
             for(auto& s:catalog["sliders"]) if(s["group"]==g) {
-                auto text=s.contains("label")?DetailText{s["label"],s.value("lo",std::string()),s.value("hi",std::string())}:detailText(s["name"]);
+                auto field=[&](const char* key) {
+                    std::string en=std::string(key)+"En";
+                    return english()&&s.contains(en)?s[en].get<std::string>():tr(s.value(key,std::string()));
+                };
+                auto text=s.contains("label")?DetailText{field("label"),field("lo"),field("hi")}:detailText(s["name"]);
                 if(!query.empty() && lower(text.label).find(query)==std::string::npos &&
                    lower(s["name"].get<std::string>()).find(query)==std::string::npos) continue;
                 rows.push_back({&s,text});
@@ -407,14 +480,14 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
             int current=state.value("eyes",0);
             std::vector<size_t> shown;
             for(size_t i=0;i<eyes.size();++i) if(eyeColor(eyes[i]["name"])) shown.push_back(i);
-            ImGui::TextUnformatted("Augenfarbe");
+            ImGui::TextUnformatted(tr("Augenfarbe"));
             float size=S(34), gap=S(6), used=0;
             for(size_t k=0;k<shown.size();++k) {
                 auto* e=eyeColor(eyes[shown[k]]["name"]);
                 if(k && used+size<=width) ImGui::SameLine(0,gap); else if(k) used=0;
                 ImGui::PushID(int(k));
                 if(theme::swatch("##eye",e->rgb,current==int(shown[k]),size)) { state["eyes"]=shown[k]; dirty_=true; }
-                if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",e->name);
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",tr(e->name));
                 ImGui::PopID(); used+=size+gap;
             }
         }
@@ -424,7 +497,7 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
         // CC-BY assets need visible attribution; show it while such a style is selected.
         for(auto& a:catalog["assets"]) if(a["kind"]=="hair" && a.value("license",std::string("CC0"))!="CC0")
             for(auto& selected:state["assets"]) if(selected==a["name"]) {
-                std::string credit="Frisur von "+a.value("author",std::string("unbekannt"))+" ("+a["license"].get<std::string>()+")";
+                std::string credit=tr(std::string("Frisur von "))+a.value("author",tr(std::string("unbekannt")))+" ("+a["license"].get<std::string>()+")";
                 theme::muted(credit.c_str());
             }
         slider("Volumen","hairVolume",0.45f);
@@ -443,7 +516,7 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
                 if(theme::swatch("##shade",shades[i].rgb,sameColor(state["hairColor"],shades[i].rgb),size)) {
                     state["hairColor"]={shades[i].rgb[0],shades[i].rgb[1],shades[i].rgb[2]}; dirty_=true;
                 }
-                if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",shades[i].name);
+                if(ImGui::IsItemHovered()) ImGui::SetTooltip("%s",tr(shades[i].name));
                 ImGui::PopID(); used+=size+gap;
             }
             // Fine tuning in HSV; the colour itself is stored as sRGB.
@@ -491,15 +564,15 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
     ImGui::SameLine(0,0);
     if(theme::action("Gespeichert laden",width*0.47f)) {
         if(human.loadPreset(preset)) { state["enabled"]=true; dirty_=true; error_.clear(); }
-        else error_="Kein gültiger gespeicherter Charakter gefunden.";
+        else error_=tr("Kein gültiger gespeicherter Charakter gefunden.");
     }
     if(dirty_ && human.rebuild(character,!showClothes_)) { dirty_=false; error_.clear(); }
-    else if(dirty_) error_="Die Vorschau konnte nicht aktualisiert werden.";
+    else if(dirty_) error_=tr("Die Vorschau konnte nicht aktualisiert werden.");
     Action action=Action::None;
     ImGui::BeginDisabled(dirty_);
     if(theme::action("Übernehmen",width*0.53f)) {
         if(human.savePreset(preset)) { open_=false; action=Action::Apply; }
-        else error_="Speichern fehlgeschlagen. Bitte erneut versuchen.";
+        else error_=tr("Speichern fehlgeschlagen. Bitte erneut versuchen.");
     }
     ImGui::EndDisabled(); ImGui::SameLine(0,0);
     if(theme::action("Abbrechen",width*0.47f)) action=cancel(human);

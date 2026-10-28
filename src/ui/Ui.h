@@ -19,6 +19,7 @@ struct Settings {
     int quality = -1;      // Quality preset; -1 until the first start picked one for this GPU
     bool vsync = false;
     int fpsLimit = 0;      // frames per second, 0 = unlimited
+    std::string language = "de";  // interface language: "de" or "en"
     std::string gpu;       // adapter name, shown next to the presets (not saved)
 };
 

@@ -4,6 +4,7 @@
 #include <GLFW/glfw3.h>
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include <imgui.h>
+#include "ui/Lang.h"
 #include "ui/Theme.h"
 #include <nlohmann/json.hpp>
 
@@ -64,7 +65,7 @@ ImVec2 textSize(ImFont* f, const char* text) { return f->CalcTextSizeA(f->FontSi
 
 void formatLatLon(char* buf, size_t n, double lat, double lon) {
     std::snprintf(buf, n, "%.5f\xC2\xB0 %s   %.5f\xC2\xB0 %s", std::abs(lat), lat >= 0 ? "N" : "S", std::abs(lon),
-                  lon >= 0 ? "O" : "W");
+                  lon >= 0 ? tr("O") : "W");
 }
 
 // ---------------------------------------------------------------- widgets
@@ -88,15 +89,17 @@ bool menuItem(const char* label, float width, ImFont* font = nullptr) {
         dl->AddRectFilled(ImVec2(pos.x, pos.y + (h - barH) * 0.5f), ImVec2(pos.x + S(4), pos.y + (h + barH) * 0.5f),
                           col(kAccent, k), S(2));
     }
-    ImVec2 ts = textSize(f, label);
+    const char* text = tr(label);
+    ImVec2 ts = textSize(f, text);
     shadowText(dl, f, ImVec2(pos.x + S(22) + S(10) * k, pos.y + (h - ts.y) * 0.5f),
-               mixCol(kText, 0.78f, kText, 1.0f, k), label);
+               mixCol(kText, 0.78f, kText, 1.0f, k), text);
     return pressed;
 }
 
 bool tabButton(const char* label, bool active) {
     ImFont* f = g_fonts.body;
-    ImVec2 ts = textSize(f, label);
+    const char* text = tr(label);
+    ImVec2 ts = textSize(f, text);
     ImVec2 pos = ImGui::GetCursorScreenPos();
     ImVec2 size(ts.x + S(28), ts.y + S(16));
     bool pressed = ImGui::InvisibleButton(label, size);
@@ -105,7 +108,7 @@ bool tabButton(const char* label, bool active) {
     *t = approach(*t, active ? 1.0f : 0.0f, 10.0f);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     uint32_t c = active || hovered ? kText : kTextDim;
-    dl->AddText(f, f->FontSize, pos + ImVec2(S(14), S(6)), col(c), label);
+    dl->AddText(f, f->FontSize, pos + ImVec2(S(14), S(6)), col(c), text);
     float uw = (size.x - S(20)) * *t;
     float cx = pos.x + size.x * 0.5f;
     if (uw > S(2))
@@ -133,7 +136,7 @@ bool toggle(const char* id, bool* v) {
 float g_labelW = 0, g_fieldW = 0;
 void rowLabel(const char* label) {
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
+    ImGui::TextUnformatted(tr(label));
     ImGui::SameLine(g_labelW);
     ImGui::SetNextItemWidth(g_fieldW);
 }
@@ -168,9 +171,9 @@ bool toggleRow(const char* label, const char* id, bool* v) {
 bool choiceRow(const char* label, const char* id, const char* const* items, int count, int* v) {
     rowLabel(label);
     bool changed = false;
-    if (ImGui::BeginCombo(id, items[std::clamp(*v, 0, count - 1)])) {
+    if (ImGui::BeginCombo(id, tr(items[std::clamp(*v, 0, count - 1)]))) {
         for (int i = 0; i < count; ++i)
-            if (ImGui::Selectable(items[i], i == *v)) {
+            if (ImGui::Selectable(tr(items[i]), i == *v)) {
                 changed = *v != i;
                 *v = i;
             }
@@ -182,7 +185,7 @@ void sectionHeader(const char* text) {
     ImGui::Dummy(ImVec2(0, S(6)));
     ImGui::PushFont(g_fonts.small);
     ImGui::PushStyleColor(ImGuiCol_Text, linear(srgb(kAccent)));
-    ImGui::TextUnformatted(text);
+    ImGui::TextUnformatted(tr(text));
     ImGui::PopStyleColor();
     ImGui::PopFont();
     ImVec2 p = ImGui::GetCursorScreenPos();
@@ -191,6 +194,8 @@ void sectionHeader(const char* text) {
 }
 
 void keyRow(const char* keys, const char* action) {
+    keys = tr(keys);
+    action = tr(action);
     ImDrawList* dl = ImGui::GetWindowDrawList();
     ImVec2 p = ImGui::GetCursorScreenPos();
     float h = g_fonts.bold->FontSize + S(8);
@@ -226,6 +231,7 @@ bool slider(const char* label,const char* id,float* value,float lo,float hi,cons
 void section(const char* text) { sectionHeader(text); }
 bool action(const char* label,float width) { return menuItem(label,width,g_fonts.body); }
 void muted(const char* text) {
+    text=tr(text);
     ImGui::PushFont(g_fonts.small); ImGui::TextDisabled("%s",text); ImGui::PopFont();
 }
 float row(const char* label) { rowLabel(label); return g_fieldW; }
@@ -252,6 +258,7 @@ void backdrop(float edge) {
 }
 void heading(ImVec2 position,const char* title,const char* subtitle) {
     auto* dl=ImGui::GetWindowDrawList();
+    title=tr(title); subtitle=tr(subtitle);
     shadowText(dl,g_fonts.title,position,col(kText),title);
     float y=position.y+g_fonts.title->FontSize+S(4);
     dl->AddText(g_fonts.body,g_fonts.body->FontSize,ImVec2(position.x+S(4),y),col(kTextDim),subtitle);
@@ -268,8 +275,8 @@ bool choice(const char* id,const char* title,const char* description,bool active
     dl->AddRectFilled(pos,pos+size,col(active?kAccent:0xFFFFFF,active?0.10f:hovered?0.09f:0.035f),S(6));
     dl->AddRect(pos,pos+size,col(active?kAccent:0xFFFFFF,active?0.65f:0.10f),S(6));
     if(active) dl->AddRectFilled(pos+ImVec2(0,S(15)),pos+ImVec2(S(3),size.y-S(15)),col(kAccent),S(1));
-    dl->AddText(g_fonts.body,g_fonts.body->FontSize,pos+ImVec2(S(16),S(12)),col(active?kAccent:kText),title);
-    dl->AddText(g_fonts.small,g_fonts.small->FontSize,pos+ImVec2(S(16),S(43)),col(kTextDim),description);
+    dl->AddText(g_fonts.body,g_fonts.body->FontSize,pos+ImVec2(S(16),S(12)),col(active?kAccent:kText),tr(title));
+    dl->AddText(g_fonts.small,g_fonts.small->FontSize,pos+ImVec2(S(16),S(43)),col(kTextDim),tr(description));
     return pressed;
 }
 } // namespace theme
@@ -330,6 +337,9 @@ void loadSettings(const std::filesystem::path& file, Settings& s, render::SceneP
     get("invertY", s.invertY);
     get("fullscreen", s.fullscreen);
     get("quality", s.quality);
+    get("language", s.language);
+    if (s.language != "en") s.language = "de";
+    setLanguage(s.language == "en" ? Language::English : Language::German);
     get("vsync", s.vsync);
     get("fpsLimit", s.fpsLimit);
     get("renderScale", p.renderScale);
@@ -373,6 +383,7 @@ void saveSettings(const std::filesystem::path& file, const Settings& s, const re
         {"invertY", s.invertY},
         {"fullscreen", s.fullscreen},
         {"quality", s.quality},
+        {"language", s.language},
         {"vsync", s.vsync},
         {"fpsLimit", s.fpsLimit},
         {"renderScale", p.renderScale},
@@ -533,7 +544,7 @@ void drawHud(const game::Player& player, const Settings& s, const HudInfo& info)
             float x = cx + d / 90.0f * half;
             float fa = a * (1.0f - std::pow(std::abs(d) / 90.0f, 3.0f));
             if (deg % 45 == 0) {
-                const char* label = kCardinal[deg / 45];
+                const char* label = tr(kCardinal[deg / 45]);
                 ImFont* f = deg % 90 == 0 ? g_fonts.bold : g_fonts.small;
                 fa *= deg % 90 == 0 ? 1.0f : 0.8f;
                 ImVec2 ts = textSize(f, label);
@@ -555,11 +566,11 @@ void drawHud(const game::Player& player, const Settings& s, const HudInfo& info)
         int n = 0;
         formatLatLon(lines[n].text, sizeof(lines[n].text), player.lat(), player.lon());
         lines[n].font = g_fonts.small, lines[n].color = kText, lines[n++].alpha = 0.7f;
-        std::snprintf(lines[n].text, sizeof(lines[n].text), "%.0f m \xC3\xBC. NN   \xC2\xB7   %s", player.altitude(),
-                      landCoverName(info.landCover));
+        std::snprintf(lines[n].text, sizeof(lines[n].text), tr("%.0f m \xC3\xBC. NN   \xC2\xB7   %s"), player.altitude(),
+                      tr(landCoverName(info.landCover)));
         lines[n].font = g_fonts.body, lines[n].color = kText, lines[n++].alpha = 1.0f;
         if (player.flying) {
-            std::snprintf(lines[n].text, sizeof(lines[n].text), "FLUGMODUS  \xC2\xB7  %.0f m/s", player.speed());
+            std::snprintf(lines[n].text, sizeof(lines[n].text), tr("FLUGMODUS  \xC2\xB7  %.0f m/s"), player.speed());
             lines[n].font = g_fonts.bold, lines[n].color = kAccent, lines[n++].alpha = 1.0f;
         }
         float cardW = 0, cardH = 0;
@@ -579,7 +590,7 @@ void drawHud(const game::Player& player, const Settings& s, const HudInfo& info)
         }
 
         if (player.waitingForGround()) {
-            const char* text = "Lade Gel\xC3\xA4nde ...";
+            const char* text = tr("Lade Gel\xC3\xA4nde ...");
             ImVec2 ts = textSize(g_fonts.body, text);
             ImVec2 c(vs.x * 0.5f - ts.x * 0.5f - S(16), vs.y - S(60));
             dl->PathArcTo(c, S(8), info.time * 6.0f, info.time * 6.0f + 4.5f, 24);
@@ -597,7 +608,7 @@ void drawHud(const game::Player& player, const Settings& s, const HudInfo& info)
     // Short hint after start.
     float hint = std::clamp(7.0f - info.time, 0.0f, 1.0f) * std::clamp(info.time - 0.5f, 0.0f, 1.0f) * a;
     if (hint > 0.0f) {
-        const char* text = "Esc  Men\xC3\xBC";
+        const char* text = tr("Esc  Men\xC3\xBC");
         ImVec2 ts = textSize(g_fonts.small, text);
         shadowText(dl, g_fonts.small, ImVec2(vs.x - ts.x - S(28), vs.y - ts.y - S(28)), col(kText, 0.8f * hint), text, hint);
     }
@@ -644,7 +655,7 @@ PauseMenu::Action PauseMenu::draw(GLFWwindow* window, Settings& s, render::Scene
     float top = vs.y * 0.16f;
     Action action = Action::None;
 
-    const char* title = page_ == Page::Main ? "WorldWalker" : page_ == Page::Options ? "Optionen" : "Teleport";
+    const char* title = page_ == Page::Main ? "WorldWalker" : page_ == Page::Options ? tr("Optionen") : "Teleport";
     ImVec2 ts = textSize(g_fonts.title, title);
     shadowText(dl, g_fonts.title, ImVec2(x0, top), col(kText), title);
     float y = top + ts.y + S(2);
@@ -663,7 +674,7 @@ PauseMenu::Action PauseMenu::draw(GLFWwindow* window, Settings& s, render::Scene
         case Page::Teleport: action = drawTeleport(); break;
     }
 
-    const char* hint = page_ == Page::Main ? "Esc  Zur\xC3\xBC" "ck zum Spiel" : "Esc  Zur\xC3\xBC" "ck";
+    const char* hint = tr(page_ == Page::Main ? "Esc  Zur\xC3\xBC" "ck zum Spiel" : "Esc  Zur\xC3\xBC" "ck");
     dl->AddText(g_fonts.small, g_fonts.small->FontSize, ImVec2(x0 + S(4), vs.y - S(48)), col(kTextDim, 0.8f), hint);
 
     ImGui::End();
@@ -719,7 +730,7 @@ void PauseMenu::drawOptions(GLFWwindow* window, Settings& s, render::SceneParams
             }
             if (!s.gpu.empty()) {
                 ImGui::PushFont(g_fonts.small);
-                ImGui::TextDisabled("Grafikkarte: %s", s.gpu.c_str());
+                ImGui::TextDisabled(tr("Grafikkarte: %s"), s.gpu.c_str());
                 ImGui::PopFont();
             }
             // Any individual change turns the preset into "Benutzerdefiniert".
@@ -789,18 +800,19 @@ void PauseMenu::drawOptions(GLFWwindow* window, Settings& s, render::SceneParams
                                            "August", "September", "Oktober", "November", "Dezember"};
             sectionHeader("SONNENSTAND");
             int minutes = int(p.timeOfDay * 60.0f + 0.5f);
-            std::snprintf(fmt, sizeof(fmt), "%02d:%02d Uhr", (minutes / 60) % 24, minutes % 60);
+            std::snprintf(fmt, sizeof(fmt), english() ? "%02d:%02d" : "%02d:%02d Uhr", (minutes / 60) % 24, minutes % 60);
             sliderRow("Uhrzeit", "##time", &p.timeOfDay, 0.0f, 24.0f, fmt);
             int doy = int(p.dayOfYear + 0.5f), m = 0;
             while (m < 11 && doy > kLen[m]) doy -= kLen[m++];
-            std::snprintf(fmt, sizeof(fmt), "%d. %s", doy, kMonth[m]);
+            if (english()) std::snprintf(fmt, sizeof(fmt), "%s %d", tr(kMonth[m]), doy);
+            else std::snprintf(fmt, sizeof(fmt), "%d. %s", doy, kMonth[m]);
             sliderRow("Datum", "##day", &p.dayOfYear, 1.0f, 365.0f, fmt);
             sectionHeader("WETTER");
             std::snprintf(fmt, sizeof(fmt), "%d %%%%", int(p.cloudCoverage * 100.0f + 0.5f));
             sliderRow("Bew\xC3\xB6lkung", "##clouds", &p.cloudCoverage, 0.0f, 1.0f, fmt);
             ImGui::Dummy(ImVec2(0, S(2)));
             ImGui::PushFont(g_fonts.small);
-            ImGui::TextDisabled("Uhrzeit ist lokale Sonnenzeit am aktuellen Standort.");
+            ImGui::TextDisabled("%s", tr("Uhrzeit ist lokale Sonnenzeit am aktuellen Standort."));
             ImGui::PopFont();
             break;
         }
@@ -831,6 +843,13 @@ void PauseMenu::drawOptions(GLFWwindow* window, Settings& s, render::SceneParams
             toggleRow("HUD anzeigen", "##hud", &s.showHud);
             toggleRow("Fadenkreuz", "##cross", &s.crosshair);
             toggleRow("Debug-Info (F3)", "##dbg", &s.showDebug);
+            sectionHeader("SPRACHE");
+            static const char* kLanguages[] = {"Deutsch", "English"};
+            int lang = s.language == "en" ? 1 : 0;
+            if (choiceRow("Sprache", "##lang", kLanguages, 2, &lang)) {
+                s.language = lang ? "en" : "de";
+                setLanguage(lang ? Language::English : Language::German);
+            }
             break;
         }
     }
@@ -868,7 +887,7 @@ PauseMenu::Action PauseMenu::drawTeleport() {
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, linear(srgb(0xFFDE96)));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, linear(srgb(0xD9AC55)));
     ImGui::PushStyleColor(ImGuiCol_Text, linear(srgb(kInk)));
-    if (ImGui::Button("Hinspringen", ImVec2(g_fieldW, 0))) {
+    if (ImGui::Button((std::string(tr("Hinspringen")) + "###go").c_str(), ImVec2(g_fieldW, 0))) {
         teleportLat = std::clamp(std::atof(latBuf_), -85.0, 85.0);
         teleportLon = std::clamp(std::atof(lonBuf_), -180.0, 180.0);
         a = Action::Teleport;
@@ -886,10 +905,11 @@ PauseMenu::Action PauseMenu::drawTeleport() {
             teleportLon = pl.lon;
             a = Action::Teleport;
         }
-        ImVec2 rs = textSize(g_fonts.small, pl.region);
+        const char* region = tr(pl.region);
+        ImVec2 rs = textSize(g_fonts.small, region);
         float h = g_fonts.body->FontSize * 1.55f;
         dl->AddText(g_fonts.small, g_fonts.small->FontSize, ImVec2(x + width + S(22) - rs.x - S(12), pos.y + (h - rs.y) * 0.5f),
-                    col(kTextDim), pl.region);
+                    col(kTextDim), region);
     }
     ImGui::EndChild();
     return a;

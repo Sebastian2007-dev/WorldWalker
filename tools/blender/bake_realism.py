@@ -272,7 +272,7 @@ def main():
             f.write(np.asarray(idx, np.uint32).tobytes())
             f.write(np.asarray(d, np.float32).tobytes())
     meta_path = os.path.join(OUT, "human.json")
-    meta = json.load(open(meta_path))
+    meta = json.load(open(meta_path, encoding="utf-8"))
     meta["realism"] = [{"sex": sex, "target": i, "normal": rel} for i, (sex, (rel, _, _)) in enumerate(results.items())]
     with open(meta_path, "w") as f:
         json.dump(meta, f)
