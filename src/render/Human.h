@@ -35,6 +35,12 @@ private:
         float reference[3]{1, 1, 1};
         bool scaled = false;
         std::map<std::string, Target> morphs;  // optional (genitals): offset deltas per asset vertex, by name
+        // Optional strand rig (hair, "rig" in human.json): bones bound like proxy vertices, per vertex hair bone weights.
+        struct RigPoint { uint32_t refs[3]; float weights[3]; glm::vec3 offset; };
+        struct RigBone { int32_t parent; RigPoint head, tail; };
+        struct RigWeights { uint8_t bones[4], weights[4]; };  // weights of 255; the rest stays with the body's joints
+        std::vector<RigBone> rig;
+        std::vector<RigWeights> rigWeights;
     };
     // Humans whose sexes have different meshes (tools/blender/bake_mblab.py: <dir>/female, <dir>/male) keep the
     // other sex's data here; activate swaps it in.

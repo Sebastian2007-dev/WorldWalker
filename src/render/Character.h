@@ -37,6 +37,19 @@ struct SkeletonBone {
     glm::vec3 pos{0};
 };
 
+// Simulated hair strands (tools/blender/bake_hair.py rigs): bones in chains hanging from one body bone, bind pose,
+// model space. Their joints follow the skeleton's in the palette.
+struct HairBone {
+    int parent = -1;  // hair bone, -1: hangs from the anchor bone
+    glm::vec3 head{0}, tail{0};
+};
+// Capsules the strands are kept out of (head, neck, trunk, shoulders), bind pose, model space.
+struct HairCollider {
+    int bone = 0;
+    glm::vec3 a{0}, b{0};
+    float radius = 0;
+};
+
 struct MeshPart {
     uint32_t firstIndex = 0, indexCount = 0;
     uint32_t albedo = 0, normal = 0;  // bindless texture indices
@@ -50,7 +63,7 @@ struct MeshPart {
 
 class Character {
 public:
-    static constexpr uint32_t kMaxBones = 128;
+    static constexpr uint32_t kMaxBones = 256;  // joint indices are bytes
 
     // Pipelines and animation clips (from <animDir>/character.json).
     bool init(gfx::Device& dev, gfx::Bindless& bindless, const std::filesystem::path& animDir, VkFormat colorFormat,
@@ -60,6 +73,8 @@ public:
     bool loadBakedMesh(const std::filesystem::path& dir);
 
     void setSkeleton(const std::vector<SkeletonBone>& bones);
+    // After setSkeleton (which clears it): strands whose joints are skeleton().size() + hair bone index.
+    void setHair(int anchor, const std::vector<HairBone>& bones, const std::vector<HairCollider>& colliders);
     void setMesh(const std::vector<SkinVertex>& vertices, const std::vector<uint32_t>& indices,
                  const std::vector<MeshPart>& parts);
     uint32_t loadTexture(const std::filesystem::path& file, bool srgb);  // cached by path
@@ -104,6 +119,9 @@ private:
     int findClip(const char* name) const;
     void setTarget(int clip, float w);
     void samplePose();
+    // Strand physics on the sampled pose: verlet tails pulled towards the rest shape, follow-the-leader lengths, kept
+    // out of the colliders; the frame's own motion (in) is inertia.
+    void simulateHair(float dt, const AnimInput& in);
 
     gfx::Device* dev_ = nullptr;
     gfx::Bindless* bindless_ = nullptr;
@@ -117,7 +135,15 @@ private:
     std::vector<MeshPart> parts_;
     std::vector<gfx::Image> textures_;
     std::unordered_map<std::string, uint32_t> textureCache_;
-    std::vector<glm::mat4> palette_;
+    std::vector<glm::mat4> palette_;  // skeleton, then hair bones
+    int hairAnchor_ = -1;
+    std::vector<HairBone> hair_;
+    std::vector<HairCollider> colliders_;
+    std::vector<glm::vec3> hairTail_, hairPrev_;  // simulated tails, model space (current and previous step)
+    std::vector<float> hairStiffness_;            // pull towards the rest shape per 1/60 s, stiff at the roots
+    std::vector<float> hairRigidity_;             // how far the rest shape turns with the head, 1 at the roots
+    float hairTime_ = 0;                          // fixed step accumulator
+    bool hairReset_ = true;
     gfx::Buffer vertices_, indices_;
     std::vector<gfx::Buffer> retiredMeshes_; // enqueue deletion after beginFrame has submitted pending uploads
     gfx::Buffer joints_[gfx::kFramesInFlight];

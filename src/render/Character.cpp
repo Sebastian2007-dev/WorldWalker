@@ -269,8 +269,113 @@ void Character::setSkeleton(const std::vector<SkeletonBone>& bones) {
     inverseBind_.resize(bones_.size());
     for (size_t b = 0; b < bones_.size(); ++b) inverseBind_[b] = glm::inverse(boneMatrix(bones_[b].rot, bones_[b].pos));
     palette_.assign(bones_.size(), glm::mat4(1.0f));
+    hairAnchor_ = -1;
+    hair_.clear();
+    colliders_.clear();
     retarget();
     samplePose();
+}
+
+void Character::setHair(int anchor, const std::vector<HairBone>& bones, const std::vector<HairCollider>& colliders) {
+    if (anchor < 0 || size_t(anchor) >= bones_.size() || bones_.size() + bones.size() > kMaxBones) return;
+    hairAnchor_ = anchor;
+    hair_ = bones;
+    colliders_.clear();
+    for (const HairCollider& c : colliders)
+        if (c.bone >= 0 && size_t(c.bone) < bones_.size()) colliders_.push_back(c);
+    palette_.resize(bones_.size() + hair_.size(), glm::mat4(1.0f));
+    // Roots hold the strand's shape, tips swing: the pull towards the rest shape falls off along the chain, and so
+    // does how much of the head's turning the rest shape follows (see simulateHair).
+    hairStiffness_.resize(hair_.size());
+    hairRigidity_.resize(hair_.size());
+    std::vector<int> depth(hair_.size(), 0);
+    std::vector<float> along(hair_.size(), 0.0f);  // metres from the root
+    for (size_t k = 0; k < hair_.size(); ++k) {
+        int p = hair_[k].parent;
+        if (p >= int(k)) { hair_.clear(); palette_.resize(bones_.size()); return; }  // parents first
+        if (p >= 0) {
+            depth[k] = depth[size_t(p)] + 1;
+            along[k] = along[size_t(p)] + glm::distance(hair_[size_t(p)].head, hair_[size_t(p)].tail);
+        }
+        hairStiffness_[k] = 0.03f + 0.3f * std::exp(-0.45f * float(depth[k]));
+        hairRigidity_[k] = std::exp(-along[k] / 0.12f);
+    }
+    hairTail_.assign(hair_.size(), glm::vec3(0));
+    hairPrev_ = hairTail_;
+    hairReset_ = true;
+    simulateHair(0.0f, AnimInput{});
+}
+
+void Character::simulateHair(float dt, const AnimInput& in) {
+    if (hair_.empty()) return;
+    const size_t base = bones_.size();
+    // Damping slows the strands relative to the body, the air drag relative to the world (per step).
+    constexpr float kStep = 1.0f / 60.0f, kDamping = 0.93f, kAirDrag = 0.015f, kGravity = 9.81f, kMargin = 0.012f;
+    // The body's own motion: points at rest in the world move against it in model space (z up, +y forward, x right).
+    glm::vec3 move = glm::vec3(in.velocity, in.verticalSpeed) * kStep;
+    if (dt > 0.25f) hairReset_ = true;  // a hitch or a teleport: start again from the rest shape
+    struct Capsule { glm::vec3 a, b; float r; };
+    std::vector<Capsule> capsules;
+    for (const HairCollider& c : colliders_) {
+        const glm::mat4& m = palette_[size_t(c.bone)];
+        capsules.push_back({glm::vec3(m * glm::vec4(c.a, 1.0f)), glm::vec3(m * glm::vec4(c.b, 1.0f)), c.radius + kMargin});
+    }
+    // Parents first: each bone hangs from its parent's frame of this step.
+    auto solve = [&](bool integrate) {
+        for (size_t k = 0; k < hair_.size(); ++k) {
+            const HairBone& h = hair_[k];
+            const glm::mat4& f = h.parent < 0 ? palette_[size_t(hairAnchor_)] : palette_[base + size_t(h.parent)];
+            glm::vec3 head = glm::vec3(f * glm::vec4(h.head, 1.0f)), rest = glm::vec3(f * glm::vec4(h.tail, 1.0f));
+            // The shape to return to: near the scalp it turns with the head (bangs, partings); further down the strand
+            // it hangs as in the bind pose, else a nod would swing long hair through the body.
+            glm::vec3 bind = h.tail - h.head;
+            glm::vec3 hang = glm::mix(bind, rest - head, hairRigidity_[k]);
+            glm::vec3 target = head + hang * (glm::length(bind) / std::max(glm::length(hang), 1e-6f));
+            glm::vec3& x = hairTail_[k];
+            if (hairReset_) x = hairPrev_[k] = target;
+            else if (integrate) {
+                glm::vec3 moved = x - hairPrev_[k];  // over the last step, in the world
+                glm::vec3 v = moved - (moved - move) * (1.0f - kDamping) - moved * kAirDrag;
+                hairPrev_[k] = x;
+                x += v + glm::vec3(0, 0, -kGravity * kStep * kStep);
+                x += (target - x) * hairStiffness_[k];
+            }
+            // The rest shape counts as free of the body: a capsule pushes no further out than the rest position lies.
+            // The push gives no momentum (the previous position moves along), so a swinging arm doesn't fling strands.
+            for (const Capsule& c : capsules) {
+                glm::vec3 ab = c.b - c.a;
+                float inv = 1.0f / std::max(glm::dot(ab, ab), 1e-8f);
+                auto axis = [&](glm::vec3 q) { return c.a + ab * std::clamp(glm::dot(q - c.a, ab) * inv, 0.0f, 1.0f); };
+                float r = std::min(c.r, glm::distance(target, axis(target)));
+                glm::vec3 p = axis(x), d = x - p;
+                float l = glm::length(d);
+                if (l < r && l > 1e-6f) {
+                    glm::vec3 push = d * (r / l - 1.0f);
+                    x += push;
+                    hairPrev_[k] += push;
+                }
+            }
+            // Follow the leader: the bone keeps its length.
+            glm::vec3 d = x - head, d0 = rest - head;
+            float len = glm::length(d0), l = glm::length(d);
+            if (len < 1e-6f) { x = rest; palette_[base + k] = f; continue; }
+            x = head + (l > 1e-6f ? d / l : d0 / len) * len;
+            glm::mat4 r = glm::mat4_cast(shortestArc(d0 / len, (x - head) / len));
+            r[3] = glm::vec4(head - glm::mat3(r) * head, 1.0f);
+            palette_[base + k] = r * f;
+        }
+        hairReset_ = false;
+    };
+    hairTime_ = std::min(hairTime_ + dt, 4.0f * kStep);
+    if (hairTime_ < kStep) { solve(false); return; }
+    glm::mat3 turn = glm::mat3(glm::angleAxis(in.turnRate * kStep, glm::vec3(0, 0, 1)));
+    for (; hairTime_ >= kStep; hairTime_ -= kStep) {
+        for (size_t k = 0; k < hair_.size(); ++k) {
+            hairTail_[k] = turn * hairTail_[k] - move;
+            hairPrev_[k] = turn * hairPrev_[k] - move;
+        }
+        solve(true);
+    }
 }
 
 void Character::retarget() {
@@ -333,7 +438,7 @@ void Character::setTarget(int clip, float w) {
 
 void Character::update(float dt, const AnimInput& in) {
     if (!loaded() || clips_.empty()) return;
-    if (!animated_) { samplePose(); return; }
+    if (!animated_) { samplePose(); return; }  // bind pose: the hair keeps its rest shape too
     for (auto& l : layers_) l.target = 0.0f;
 
     // ---- airborne: jump take-off, then falling; long falls end in a landing
@@ -419,6 +524,7 @@ void Character::update(float dt, const AnimInput& in) {
         }
     }
     samplePose();
+    simulateHair(dt, in);
 }
 
 void Character::samplePose() {

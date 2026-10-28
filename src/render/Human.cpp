@@ -133,6 +133,16 @@ bool Human::loadDirectory(const std::filesystem::path& directory) {
                 size_t limit=name.rfind("body:",0)==0?base_.size():asset.vertices.size();
                 for(auto i:t.indices) if(i>=limit) throw std::runtime_error("Invalid asset morph vertex");
             }
+            if(a.contains("rig")) {
+                std::ifstream rf(directory/a.at("rig").get<std::string>(),std::ios::binary);
+                array(rf,asset.rig,count(rf)); array(rf,asset.rigWeights,count(rf));
+                if(asset.rigWeights.size()!=asset.vertices.size()) throw std::runtime_error("Invalid rig weights");
+                for(size_t k=0;k<asset.rig.size();++k) {
+                    if(asset.rig[k].parent<-1 || asset.rig[k].parent>=int(k)) throw std::runtime_error("Invalid rig bone");
+                    for(auto* q:{&asset.rig[k].head,&asset.rig[k].tail}) for(auto i:q->refs) if(i>=base_.size()) throw std::runtime_error("Invalid rig bone");
+                }
+                for(auto& w:asset.rigWeights) for(int k=0;k<4;++k) if(w.weights[k] && w.bones[k]>=asset.rig.size()) throw std::runtime_error("Invalid rig weight");
+            }
             for(auto& v:asset.vertices) for(auto i:v.refs) if(i>=base_.size()) throw std::runtime_error("Invalid proxy vertex");
             for(auto i:asset.indices) if(i>=asset.vertices.size()) throw std::runtime_error("Invalid proxy triangle");
             for(auto i:asset.deleted) if(i>=base_.size()) throw std::runtime_error("Invalid hidden vertex");
@@ -646,6 +656,8 @@ bool Human::rebuild(Character& character, bool hideClothes) {
         // Vertices of skin assets with the body vertices they follow, to take over the body's crease shading.
         struct OnSkin { uint32_t vertex; const ProxyVertex* proxy; float height; };  // height above the skin, metres
         std::vector<OnSkin> onSkin;
+        // Strand rigs of the shown hair: their bones follow the skeleton's in the joint palette (Character::setHair).
+        std::vector<HairBone> hairBones;
         for(size_t a=0;a<assets_.size();++a) if(active[a]) {
             auto& asset=assets_[a]; auto material=meta_["assets"][a];
             if(material["kind"]=="eyes" && !meta_["eyeMaterials"].empty()) material["albedo"]=meta_["eyeMaterials"][std::clamp(state.value("eyes",0),0,int(meta_["eyeMaterials"].size())-1)]["albedo"];
@@ -664,6 +676,14 @@ bool Human::rebuild(Character& character, bool hideClothes) {
             }
             // Assets bound to one bone ("bone") move with it rigidly instead of blending the body's weights.
             int rigid=-1;
+            uint32_t hairBase=uint32_t(bones.size()+hairBones.size());
+            const bool rigged=!asset.rig.empty() && hairBase+asset.rig.size()<=Character::kMaxBones;
+            if(rigged) for(auto& b:asset.rig) {
+                auto at=[&](const Asset::RigPoint& q) {
+                    glm::vec3 p=q.offset*scale; for(int k=0;k<3;++k) p+=positions[q.refs[k]]*q.weights[k]; return p;
+                };
+                hairBones.push_back({b.parent<0?-1:int(hairBase-bones.size())+b.parent,at(b.head),at(b.tail)});
+            }
             if(material.contains("bone")) for(size_t b=0;b<bones.size();++b) if(bones[b].name==material.value("bone",std::string())) rigid=int(b);
             uint32_t offset=uint32_t(vertices.size()), first=uint32_t(indices.size());
             for(size_t vi=0;vi<asset.vertices.size();++vi) {
@@ -675,6 +695,12 @@ bool Human::rebuild(Character& character, bool hideClothes) {
                 }
                 // Rigid assets bend with the body where they lie on the skin and follow their bone where they stand
                 // out, so their edge stays on the skin in any pose.
+                if(rigged) {
+                    auto& w=asset.rigWeights[vi]; float strand=0;
+                    for(int k=0;k<4;++k) strand+=float(w.weights[k])/255.0f;
+                    for(auto& [joint,x]:influences) x*=1-std::min(strand,1.0f);
+                    for(int k=0;k<4;++k) if(w.weights[k]) influences[hairBase+w.bones[k]]+=float(w.weights[k]);
+                }
                 if(rigid>=0) {
                     float t=glm::smoothstep(0.002f,0.01f,glm::length((v.offset+morphed[vi])*scale));
                     for(auto& [joint,w]:influences) w*=1-t;
@@ -831,10 +857,45 @@ bool Human::rebuild(Character& character, bool hideClothes) {
         for(auto& v:vertices) {
             if(!std::isfinite(v.pos.x) || !std::isfinite(v.pos.y) || !std::isfinite(v.pos.z) || glm::length(v.pos)>10.0f)
                 throw std::runtime_error("Invalid fitted vertex position");
-            for(int k=0;k<4;++k) if(((v.weights>>(k*8))&255) && ((v.joints>>(k*8))&255)>=bones.size())
+            for(int k=0;k<4;++k) if(((v.weights>>(k*8))&255) && ((v.joints>>(k*8))&255)>=bones.size()+hairBones.size())
                 throw std::runtime_error("Invalid skin joint");
         }
-        character.setSkeleton(bones); character.setMesh(vertices,indices,parts); return true;
+        character.setSkeleton(bones);
+        if(!hairBones.empty()) {
+            // Capsules around head, neck, trunk and shoulders: from the bone to the next one, as thick as the skin it
+            // carries (a low percentile, so the strands resting on the back stay where they are). No arms or thighs: an
+            // arm or knee swinging forward through the strands in front would carry them along instead of slipping past.
+            auto index=[&](const char* name) { for(size_t b=0;b<bones.size();++b) if(bones[b].name==name) return int(b); return -1; };
+            std::vector<HairCollider> colliders;
+            const std::pair<const char*,const char*> segments[]={{"Head",nullptr},{"Neck","Head"},{"Spine2","Neck"},{"Spine1","Spine2"},
+                {"Spine","Spine1"},{"Hips","Spine"},{"LeftShoulder","LeftArm"},{"RightShoulder","RightArm"}};
+            for(auto [from,to]:segments) {
+                int b=index(from), c=to?index(to):-1;
+                if(b<0 || (to && c<0)) continue;
+                std::vector<glm::vec3> skin;
+                for(size_t v=0;v<positions.size();++v) {
+                    int best=0; for(int k=1;k<4;++k) if(((weights_[v]>>(k*8))&255)>((weights_[v]>>(best*8))&255)) best=k;
+                    if(int((joints_[v]>>(best*8))&255)==b) skin.push_back(positions[v]);
+                }
+                if(skin.size()<8) continue;
+                glm::vec3 a=bones[size_t(b)].pos, e;
+                if(c>=0) e=bones[size_t(c)].pos;
+                else { e=glm::vec3(0); float top=-1e9f; for(auto& p:skin) { e+=p; top=std::max(top,p.z); } e/=float(skin.size()); e.z=top; }
+                auto radius=[&](float pct) {
+                    std::vector<float> d;
+                    for(auto& p:skin) {
+                        glm::vec3 ae=e-a; float t=std::clamp(glm::dot(p-a,ae)/std::max(glm::dot(ae,ae),1e-8f),0.0f,1.0f);
+                        d.push_back(glm::distance(p,a+ae*t));
+                    }
+                    std::nth_element(d.begin(),d.begin()+long(d.size()*pct),d.end()); return d[size_t(d.size()*pct)];
+                };
+                float r=radius(0.35f);
+                if(c<0) e.z-=r;  // the head: its cap ends at the crown
+                colliders.push_back({b,a,e,r});
+            }
+            character.setHair(index("Head"),hairBones,colliders);
+        }
+        character.setMesh(vertices,indices,parts); return true;
     } catch(const std::exception& e) { std::fprintf(stderr,"Human rebuild: %s\n",e.what()); return false; }
 }
 }

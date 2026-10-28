@@ -92,24 +92,76 @@ def read_obj(path):
 
 
 def read_fbx(path):
-    """Like read_obj (one group "hair"), plus the rig's head joint. Blender looks along -y, the model along +y."""
+    """Like read_obj (one group "hair"), plus the rig's head joint, its hair bones (the Head bone's descendants: name,
+    parent name, head, tail) and per vertex the weights on them ({name: weight}, normalised over all groups)."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.import_scene.fbx(filepath=path)
-    v, vt, faces = [], [], []
+    arm = [o for o in bpy.data.objects if o.type == "ARMATURE"][0]
+    flip = np.diag([-1.0, -1.0, 1.0])  # Blender looks along -y, the model along +y
+
+    def model(p):
+        return flip @ np.array(arm.matrix_world @ p)
+
+    hair, todo = [], list(arm.data.bones["Head"].children)
+    while todo:
+        b = todo.pop(0)
+        hair.append((b.name, b.parent.name, model(b.head_local), model(b.tail_local)))
+        todo += list(b.children)
+    names = {h[0] for h in hair}
+    v, vt, faces, weights = [], [], [], []
     for o in bpy.data.objects:
         if o.type != "MESH":
             continue
         m, base = o.data, len(v)
         v += [list(o.matrix_world @ x.co) for x in m.vertices]
+        group = {g.index: g.name for g in o.vertex_groups}
+        for x in m.vertices:
+            total = sum(g.weight for g in x.groups)
+            weights.append({group[g.group]: g.weight / total for g in x.groups
+                            if group[g.group] in names and total > 0})
         uv = m.uv_layers[0].data
         for poly in m.polygons:
             faces.append(("hair", None, [(base + m.loops[li].vertex_index, len(vt) + k)
                                          for k, li in enumerate(poly.loop_indices)]))
             vt += [list(uv[li].uv) for li in poly.loop_indices]
-    arm = [o for o in bpy.data.objects if o.type == "ARMATURE"][0]
-    flip = np.diag([-1.0, -1.0, 1.0])
-    joint = flip @ np.array(arm.matrix_world @ arm.data.bones["Head"].head_local)
-    return np.asarray(v) @ flip, np.asarray(vt), faces, joint
+    return (np.asarray(v) @ flip, np.asarray(vt), faces, model(arm.data.bones["Head"].head_local),
+            reduce_rig(hair), weights)
+
+
+def reduce_rig(hair, per_chain=6):
+    """The hair rigs have up to 26 chains of up to 14 bones; the engine's skeleton holds 256 bones with the body's. Each
+    unbranched run of bones keeps at most `per_chain` of them, evenly spaced; a dropped bone's weight goes to the kept
+    bones before and after it, by its place between them.
+    Returns the kept bones [(parent index or -1 for the head, head, tail)] in parent-first order and, per source bone
+    name, its weight split [(kept index, share)]."""
+    by_name = {h[0]: h for h in hair}
+    children = {}
+    for name, parent, _, _ in hair:
+        children.setdefault(parent, []).append(name)
+    kept, split, cover = [], {}, {}  # cover: source bone -> kept bone it lies in
+    runs = [(c, -1) for c in children.get("Head", [])]
+    while runs:
+        first, parent = runs.pop(0)
+        run = [first]
+        while len(children.get(run[-1], [])) == 1:
+            run.append(children[run[-1]][0])
+        n, k = len(run), min(len(run), per_chain)
+        keep = [round(j * n / k) for j in range(k)]
+        ids = []
+        for j, at in enumerate(keep):
+            tail = by_name[run[keep[j + 1]]][2] if j + 1 < k else by_name[run[-1]][3]
+            ids.append(len(kept))
+            kept.append((parent if j == 0 else ids[j - 1], by_name[run[at]][2], tail))
+        for m, name in enumerate(run):
+            j = max(i for i, at in enumerate(keep) if at <= m)
+            cover[name] = ids[j]
+            if j + 1 < k:
+                f = (m - keep[j]) / (keep[j + 1] - keep[j])
+                split[name] = [(ids[j], 1 - f), (ids[j + 1], f)]
+            else:
+                split[name] = [(ids[j], 1.0)]
+        runs += [(c, cover[run[-1]]) for c in children.get(run[-1], [])]
+    return kept, split
 
 
 def inner_shell(v, joint):
@@ -128,10 +180,11 @@ def inner_shell(v, joint):
     return cap[list(bins.values())]
 
 
-def lift_bangs(x, eyes):
+def lift_bangs(x, eyes, tip=None):
     """Anime heads have their eyes low, so the bangs made for them hang over a realistic face down to the nose. In
     front of the face the hair between the hairline and the lowest bang tip is squashed upwards until the tips end at
-    the brows; strands at the sides of the face and below the mouth keep their place."""
+    the brows; strands at the sides of the face and below the mouth keep their place. Returns the points and the
+    tip height, which moves other points (the rig's) along the same way."""
     centre = (eyes[0] + eyes[1]) / 2
     brow, hairline, mouth = centre[2] + 0.018, centre[2] + 0.06, centre[2] - 0.06
 
@@ -140,16 +193,17 @@ def lift_bangs(x, eyes):
         return t * t * (3 - 2 * t)
 
     face = (1 - smooth(0.055, 0.08, np.abs(x[:, 0]))) * smooth(centre[1] - 0.05, centre[1] - 0.03, x[:, 1])
-    bangs = (face > 0.5) & (x[:, 2] > mouth) & (x[:, 2] < hairline)
-    if not bangs.any() or x[bangs, 2].min() >= brow:
-        return x
-    tip = x[bangs, 2].min()
+    if tip is None:
+        bangs = (face > 0.5) & (x[:, 2] > mouth) & (x[:, 2] < hairline)
+        tip = x[bangs, 2].min() if bangs.any() else brow
+    if tip >= brow:
+        return x, tip
     z = x[:, 2]
     lifted = np.where(z >= tip, hairline - (hairline - z) * (hairline - brow) / (hairline - tip), z + brow - tip)
     weight = face * smooth(mouth - 0.02, mouth, z) * (z < hairline)
     x = x.copy()
     x[:, 2] = z + weight * (lifted - z)
-    return x
+    return x, tip
 
 
 def select(faces, group, material=None):
@@ -324,16 +378,19 @@ def fit(spec, sex, body, source):
                 ids.append(key[kk])
             for m in range(1, len(ids) - 1):
                 out_tris.append((ids[0], ids[m], ids[m + 1]))
+    def move(points):
+        moved = []
+        for x in points:
+            x = place(x)
+            nb = tree.find_n(x, 8)
+            w = np.array([1.0 / max(d, 1e-4) for _, _, d in nb])
+            moved.append(x + (disp[[j for _, j, _ in nb]] * w[:, None]).sum(0) / w.sum())
+        return np.array(moved)
+
     used = np.unique([rv[0] for rv in rverts])
-    moved = []
-    for i in used:
-        x = place(v[i])
-        nb = tree.find_n(x, 8)
-        w = np.array([1.0 / max(d, 1e-4) for _, _, d in nb])
-        moved.append(x + (disp[[j for _, j, _ in nb]] * w[:, None]).sum(0) / w.sum())
-    moved = np.array(moved)
+    moved = move(v[used])
     if "fbx" in spec:
-        moved = lift_bangs(moved, eye_centres(eye_points))
+        moved, tip = lift_bangs(moved, eye_centres(eye_points))
     pos = {}
     for i, x in zip(used, moved):
         # Under the skin: out along the surface normal, a millimetre above it.
@@ -344,15 +401,17 @@ def fit(spec, sex, body, source):
         pos[i] = x
 
     # 3. Binding to the body's nearest carrier triangle.
+    def bind(x):
+        loc, _, fi, _ = carrier.find_nearest(Vector(x))
+        tri = carrier_tris[fi]
+        bw = barycentric(np.array(loc), *co[tri])
+        off = (x - co[tri].T @ bw) / 0.1  # the engine scales unscaled offsets by 0.1 (MakeHuman decimetres)
+        return struct.pack("<3I3f3f", *map(int, tri), *bw, *off)
+
     with open(os.path.join(OUT, sex, "asset_" + spec["name"] + ".bin"), "wb") as f:
         f.write(struct.pack("<I", len(rverts)))
         for i, u, w in rverts:
-            x = pos[i]
-            loc, _, fi, _ = carrier.find_nearest(Vector(x))
-            tri = carrier_tris[fi]
-            bw = barycentric(np.array(loc), *co[tri])
-            off = (x - co[tri].T @ bw) / 0.1  # the engine scales unscaled offsets by 0.1 (MakeHuman decimetres)
-            f.write(struct.pack("<3I3f3f2f", *map(int, tri), *bw, *off, u, w))
+            f.write(bind(pos[i]) + struct.pack("<2f", u, w))
         f.write(struct.pack("<I", len(out_tris)))
         f.write(np.asarray(out_tris, np.uint32).tobytes())
         f.write(struct.pack("<B", 0))
@@ -360,7 +419,34 @@ def fit(spec, sex, body, source):
             f.write(struct.pack("<IIf", 0, 0, 1.0))
         f.write(struct.pack("<I", 0))
     log(sex, spec["name"], len(rverts), "vertices,", len(out_tris), "triangles,", pushed, "pushed out of the skin")
-    return cells, grid, rows
+    rig = None
+    if "fbx" in spec:
+        # The hair rig for the engine's strand physics: bones bound to the body like the vertices (head, tail), then
+        # per vertex up to four hair bones and their weights (u8; the rest of 255 stays with the body's weights).
+        bones, split = spec["rig"]
+        ends = move(np.array([p for _, head, tail in bones for p in (head, tail)]))
+        ends, _ = lift_bangs(ends, eye_centres(eye_points), tip)
+        rig = "asset_" + spec["name"] + ".rig"
+        with open(os.path.join(OUT, sex, rig), "wb") as f:
+            f.write(struct.pack("<I", len(bones)))
+            for k, (parent, _, _) in enumerate(bones):
+                f.write(struct.pack("<i", parent) + bind(ends[2 * k]) + bind(ends[2 * k + 1]))
+            f.write(struct.pack("<I", len(rverts)))
+            for i, _, _ in rverts:
+                share = {}
+                for name, w in spec["weights"][i].items():
+                    for kept, f_ in split[name]:
+                        share[kept] = share.get(kept, 0.0) + w * f_
+                top = sorted(share.items(), key=lambda e: -e[1])[:4]
+                total = sum(w for _, w in top)
+                scale = min(1.0, sum(share.values())) / total if total > 0 else 0.0
+                ids = [k for k, _ in top] + [0] * (4 - len(top))
+                ws = [int(round(w * scale * 255)) for _, w in top] + [0] * (4 - len(top))
+                while sum(ws) > 255:
+                    ws[int(np.argmax(ws))] -= 1
+                f.write(struct.pack("<4B4B", *ids, *ws))
+        log(sex, spec["name"], "rig:", len(bones), "bones")
+    return cells, grid, rows, rig
 
 
 def atlas(spec, cells, grid, rows, sex):
@@ -375,6 +461,9 @@ def atlas(spec, cells, grid, rows, sex):
         top = np.percentile(lum[a > 0.5], 99) if (a > 0.5).any() else 1.0
         if top < 0.3:
             rgb[..., :3] = (0.22 + 0.45 * np.clip(lum / max(top, 1e-3), 0, 1))[..., None]
+        # Others ship white strands, to be tinted: undyed (a template without a hair colour) they show a mid brown.
+        elif np.median(lum[a > 0.5]) > 0.75 if (a > 0.5).any() else False:
+            rgb[..., :3] = lum[..., None] * np.array([0.42, 0.27, 0.16])
         y0 = (rows - 1 - cy) * cell
         px[y0:y0 + cell, cx * cell:(cx + 1) * cell, :3] = rgb[..., :3]
         px[y0:y0 + cell, cx * cell:(cx + 1) * cell, 3] = a
@@ -389,7 +478,7 @@ def source(spec):
     if "obj" in spec:
         v, vt, faces = read_obj(os.path.join(ROOT, spec["obj"]))
         return v, vt, faces, v[np.unique([i for c in select(faces, *spec["head"]) for i, _ in c])], 0.0
-    v, vt, faces, spec["joint"] = read_fbx(os.path.join(ROOT, spec["fbx"]))
+    v, vt, faces, spec["joint"], spec["rig"], spec["weights"] = read_fbx(os.path.join(ROOT, spec["fbx"]))
     spec["parts"] = [("hair", None, spec["texture"], None)]
     return v, vt, faces, inner_shell(v, spec["joint"]), 0.003
 
@@ -401,11 +490,13 @@ for sex in ("female", "male"):
     names = {h["name"] for h in HAIRS}
     meta["assets"] = [a for a in meta["assets"] if a["name"] not in names]
     for spec in HAIRS:
-        cells, grid, rows = fit(spec, sex, body, sources[spec["name"]])
+        cells, grid, rows, rig = fit(spec, sex, body, sources[spec["name"]])
         meta["assets"].append({"kind": "hair", "name": spec["name"], "file": "asset_" + spec["name"] + ".bin",
                                "albedo": atlas(spec, cells, grid, rows, sex), "normal": None,
                                "alphaTest": spec.get("alphaTest", True), "label": spec["label"],
                                "license": spec.get("license", "see assets/ungrouped (Character Creator export)")})
+        if rig:
+            meta["assets"][-1]["rig"] = rig
     with open(os.path.join(OUT, sex, "human.json"), "w") as f:
         json.dump(meta, f)
     log(sex, "done")
