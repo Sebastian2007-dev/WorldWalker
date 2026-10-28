@@ -93,6 +93,19 @@ bool Human::loadDirectory(const std::filesystem::path& directory) {
     try {
         directory_=directory;
         std::ifstream jf(directory / "human.json"); jf >> meta_;
+        // Optional assets baked on this machine (tools/install_asset_packs.py, bake_mblab_proxies.py), kept out of
+        // version control: extra/human.json lists them with paths relative to extra/.
+        if(std::ifstream xf(directory / "extra" / "human.json"); xf) {
+            nlohmann::json extra; xf >> extra;
+            std::set<std::string> known;
+            for(auto& a:meta_["assets"]) known.insert(a.value("name",std::string()));
+            for(auto a:extra.value("assets",nlohmann::json::array())) {
+                if(!a.is_object() || !a.contains("name") || known.count(a["name"].get<std::string>())) continue;
+                for(auto key:{"file","albedo","normal","rig"})
+                    if(a.contains(key) && a[key].is_string()) a[key]="extra/"+a[key].get<std::string>();
+                meta_["assets"].push_back(a);
+            }
+        }
         std::ifstream f(directory / "base.bin", std::ios::binary);
         array(f,base_,count(f));
         array(f,render_,count(f));

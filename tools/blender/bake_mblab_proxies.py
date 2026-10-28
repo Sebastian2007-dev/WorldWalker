@@ -4,6 +4,9 @@
 #
 #   blender -b --python tools/blender/bake_mblab_proxies.py -- <makehuman_bake_dir> <mblab_out_dir> [kind ...]
 #
+# The assets come from the MakeHuman bake and its extra/ directory (tools/install_asset_packs.py); the results go to
+# <mblab_out_dir>/<sex>/extra (human.json there lists them, paths relative to it), outside version control.
+#
 # Per body (female, male):
 #   1. The MakeHuman body takes that sex's shape (its macro targets) and is posed into the MB-Lab rest pose: every
 #      bone turns onto the MB-Lab bone's direction and stretches to its length, the skin follows its weights. The
@@ -13,7 +16,6 @@
 #      its nearest point on the posed MakeHuman skin moves with the field onto the MB-Lab skin, and the height is laid
 #      off along the normal there. Far from the skin (skirt hems, long hair) vertices just move with the field.
 #   4. Binding to the nearest MB-Lab triangle of the same body part; clothes hide the skin they cover closely.
-# Run after bake_mblab.py and bake_hair.py (each rewrites human.json); bake_mblab_genitals.py may run before or after.
 import bpy, sys, os, json, struct
 import numpy as np
 from mathutils import Vector
@@ -181,8 +183,9 @@ def prepare(src, dst, sex, targets):
             "dst_trees": dst_trees, "field": field, "affine": affine, "names": names}
 
 
-def transfer(entry, src, dst, fit, sex):
-    pv, atris, scaled, scale, _, _ = read_asset(os.path.join(MH, entry["file"]))
+def transfer(entry, origin, src, dst, fit, out):
+    """entry from the catalog in directory origin; writes the asset into the directory out."""
+    pv, atris, scaled, scale, _, _ = read_asset(os.path.join(origin, entry["file"]))
     co = fit["co"]
     s3 = np.full(3, 0.1)
     if scaled:
@@ -226,13 +229,13 @@ def transfer(entry, src, dst, fit, sex):
         np.add.at(count, pairs.ravel(), 1)
         move = 0.5 * move + 0.5 * total / count[:, None]
     placed = posed + move[weld]
-    out = []
+    binding = []
     for i, (y, q) in enumerate(zip(placed, qs)):
         loc, n, tri = nearest(fit["dst_trees"], q, y)
         if (y - loc) @ n < lowest:
             y = placed[i] = loc + n * lowest
         bw = barycentric(loc, *dst["co"][tri])
-        out.append((tri, bw, (y - dst["co"][tri].T @ bw) / 0.1))
+        binding.append((tri, bw, (y - dst["co"][tri].T @ bw) / 0.1))
     hide = []
     if entry["kind"] == "clothes":
         # Skin the cloth covers closely: within 1.5 cm over it along the normal, or up to 2 cm under it, where a coarse
@@ -246,9 +249,9 @@ def transfer(entry, src, dst, fit, sex):
             opening = np.percentile(edge[edge > np.median(placed[:, 2])], 10) if (edge > np.median(placed[:, 2])).any()                 else placed[:, 2].max()
             foot = np.char.startswith(fit["dst_parts"], "foot") & (dst["co"][:, 2] < opening - 0.01)
             hide = sorted(set(hide) | set(np.nonzero(foot)[0].tolist()))
-    with open(os.path.join(OUT, sex, entry["file"]), "wb") as f:
-        f.write(struct.pack("<I", len(out)))
-        for (tri, bw, off), uv in zip(out, pv["uv"]):
+    with open(os.path.join(out, os.path.basename(entry["file"])), "wb") as f:
+        f.write(struct.pack("<I", len(binding)))
+        for (tri, bw, off), uv in zip(binding, pv["uv"]):
             f.write(struct.pack("<3I3f3f2f", *map(int, tri), *bw, *off, *uv))
         f.write(struct.pack("<I", len(atris)))
         f.write(np.asarray(atris, np.uint32).tobytes())
@@ -257,25 +260,28 @@ def transfer(entry, src, dst, fit, sex):
             f.write(struct.pack("<IIf", 0, 0, 1.0))
         f.write(struct.pack("<I", len(hide)))
         f.write(np.asarray(hide, np.uint32).tobytes())
-    log(sex, entry["name"], len(out), "vertices,", len(hide), "skin vertices hidden")
-    # The textures stay in the MakeHuman bake; the engine resolves paths relative to the body's directory.
-    textures = {k: os.path.relpath(os.path.join(MH, entry[k]), os.path.join(OUT, sex)).replace(os.sep, "/")
+    log(os.path.basename(os.path.dirname(out)), entry["name"], len(binding), "vertices,", len(hide), "skin vertices hidden")
+    # The textures stay in the MakeHuman bake; paths are relative to the catalog's directory.
+    textures = {k: os.path.relpath(os.path.join(origin, entry[k]), out).replace(os.sep, "/")
                 for k in ("albedo", "normal") if entry.get(k)}
     # The engine binds it to the smoothed body it renders (as it does skin assets), so it keeps its height there.
-    return dict({k: v for k, v in entry.items() if k != "sex"}, smooth=True, **textures)
+    return dict({k: v for k, v in entry.items() if k != "sex"}, smooth=True, file=os.path.basename(entry["file"]),
+                **textures)
 
 
 src = read_base(MH)
 targets = read_targets(MH)
+# The MakeHuman bake's own assets and those of its extra/ directory, each with the directory its paths start from.
+catalogs = [(MH, src["meta"])]
+if os.path.exists(os.path.join(MH, "extra", "human.json")):
+    catalogs.append((os.path.join(MH, "extra"), json.load(open(os.path.join(MH, "extra", "human.json"), encoding="utf-8"))))
 for sex in ("female", "male"):
     dst = read_base(os.path.join(OUT, sex))
     fit = prepare(src, dst, sex, targets)
-    meta = dst["meta"]
-    entries = [a for a in src["meta"]["assets"] if a["kind"] in KINDS]
-    names = {a["name"] for a in entries}
-    meta["assets"] = [a for a in meta["assets"] if a["name"] not in names]
-    for entry in entries:
-        meta["assets"].append(transfer(entry, src, dst, fit, sex))
-    with open(os.path.join(OUT, sex, "human.json"), "w", encoding="utf-8") as f:
-        json.dump(meta, f)
-    log(sex, "done")
+    out = os.path.join(OUT, sex, "extra")
+    os.makedirs(out, exist_ok=True)
+    assets = [transfer(entry, origin, src, dst, fit, out)
+              for origin, catalog in catalogs for entry in catalog["assets"] if entry["kind"] in KINDS]
+    with open(os.path.join(out, "human.json"), "w", encoding="utf-8") as f:
+        json.dump({"assets": assets}, f)
+    log(sex, "done:", len(assets), "assets")

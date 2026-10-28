@@ -9,3 +9,5 @@ settings.json
 tools/downloads/
 ungrouped/
 __pycache__/
+assets/baked/human/extra/
+assets/baked/mblab/*/extra/

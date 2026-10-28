@@ -284,7 +284,9 @@ def write_credits(out, assets):
 
 def main(asset_dir, out, max_size=MAX_TEX, jpeg=False):
     meta_path = os.path.join(out, "human.json")
-    meta = json.load(open(meta_path, encoding="utf-8"))
+    os.makedirs(os.path.join(out, "tex"), exist_ok=True)
+    # A new extra/ directory (install_asset_packs.py) starts with an empty catalog.
+    meta = json.load(open(meta_path, encoding="utf-8")) if os.path.exists(meta_path) else {"assets": []}
     known = {a["name"] for a in meta["assets"]}
     copy = pil_copy_texture(out, max_size, jpeg)
     packs = pack_metadata(asset_dir)

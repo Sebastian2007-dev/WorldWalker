@@ -2,16 +2,15 @@
 # assetpacks/) to the MakeHuman bake: clothes, shoes, underwear, swimwear, accessories, jewellery and beards that look
 # like real ones (no costumes, wings, superhero suits or psychedelic prints).
 #
-#   python tools/install_asset_packs.py <extracted_packs_dir> tools/asset_pack_selection.json [makehuman_bake_dir]
+#   python tools/install_asset_packs.py [makehuman_bake_dir]
+#   blender -b --python tools/blender/bake_mblab_proxies.py -- assets/baked/human assets/baked/mblab
 #
-# The packs: tools/asset_packs.txt (pack, licence suffix), from
-# https://files.makehumancommunity.org/asset_packs/<pack>/<pack>_<suffix>.zip, each unzipped into its own directory.
-#
-# <extracted_packs_dir> holds one directory per downloaded pack zip (clothes/<asset>/..., packs/<pack>.json).
-# selection.json: {"exclude": [asset, ...], "unsorted": [asset, ...]}: assets left out of the kept categories, and the
-# ones taken from "Unsorted/other". The selection is copied to <extracted_packs_dir>/../staging and baked with
-# human_assets.py (textures at most 1024 px, JPEG where opaque). Then bake_mblab_proxies.py moves them onto MB-Lab.
-import glob, json, os, re, shutil, sys
+# Downloads the packs listed in tools/asset_packs.txt (about 2 GB, into tools/downloads/mhpacks, kept between runs),
+# unzips each into its own directory and bakes the assets kept by tools/asset_pack_selection.json ("exclude": left
+# out of the kept categories, "unsorted": taken from "Unsorted/other") into <bake>/extra (textures at most 1024 px,
+# JPEG where opaque). The extra/ directories are not under version control: run both commands once per checkout.
+# The second moves the assets onto the MB-Lab bodies (their extra/ directories).
+import glob, json, os, re, shutil, sys, urllib.request, zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import human_assets
@@ -43,6 +42,35 @@ def slot(key, category):
     return human_assets.SLOTS.get(category)
 
 
+TOOLS = os.path.dirname(os.path.abspath(__file__))
+DOWNLOADS = os.path.join(TOOLS, "downloads", "mhpacks")
+
+
+def fetch():
+    """Downloads and unzips the packs that are not there yet; returns the directory of the unzipped packs."""
+    extracted = os.path.join(DOWNLOADS, "extracted")
+    os.makedirs(os.path.join(DOWNLOADS, "zips"), exist_ok=True)
+    for line in open(os.path.join(TOOLS, "asset_packs.txt"), encoding="utf-8"):
+        if not line.split():
+            continue
+        pack, suffix = line.split()
+        name = "%s_%s" % (pack, suffix)
+        zip_path = os.path.join(DOWNLOADS, "zips", name + ".zip")
+        if not os.path.exists(zip_path):
+            url = "https://files.makehumancommunity.org/asset_packs/%s/%s.zip" % (pack, name)
+            print("downloading", url, flush=True)
+            urllib.request.urlretrieve(url, zip_path + ".part")
+            os.replace(zip_path + ".part", zip_path)
+        dest = os.path.join(extracted, name)
+        if not os.path.isdir(dest):
+            with zipfile.ZipFile(zip_path) as z:
+                for m in z.namelist():  # no paths out of the pack's directory
+                    if not os.path.normpath(os.path.join(dest, m)).startswith(os.path.normpath(dest)):
+                        raise ValueError("unsafe path in %s: %s" % (zip_path, m))
+                z.extractall(dest)
+    return extracted
+
+
 def main(extracted, selection_path, bake):
     selection = json.load(open(selection_path, encoding="utf-8"))
     exclude, unsorted = set(selection["exclude"]), set(selection["unsorted"])
@@ -66,8 +94,10 @@ def main(extracted, selection_path, bake):
     for item in chosen.values():
         counts[item["slot"]] = counts.get(item["slot"], 0) + 1
     print(len(chosen), "assets:", counts, flush=True)
-    human_assets.main(staging, os.path.abspath(bake), max_size=1024, jpeg=True)
+    extra = os.path.join(os.path.abspath(bake), "extra")
+    shutil.rmtree(extra, ignore_errors=True)
+    human_assets.main(staging, extra, max_size=1024, jpeg=True)
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "assets/baked/human")
+    main(fetch(), os.path.join(TOOLS, "asset_pack_selection.json"), sys.argv[1] if len(sys.argv) > 1 else "assets/baked/human")
