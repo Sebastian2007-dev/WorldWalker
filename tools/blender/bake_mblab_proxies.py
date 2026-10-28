@@ -291,8 +291,8 @@ def transfer(entry, origin, src, dst, fit, out):
         bw = barycentric(loc, *dst["co"][tri])
         binding.append((tri, bw, (y - dst["co"][tri].T @ bw) / 0.1))
     hide = []
-    if entry["kind"] == "clothes":
-        # Skin the cloth covers closely: within 1.5 cm over it along the normal, or up to 2 cm under it, where a coarse
+    if entry["kind"] == "clothes" and not entry.get("seeThrough"):
+        # Skin the cloth covers closely (none under see-through fabric: fishnet, lace): within 1.5 cm over it along the normal, or up to 2 cm under it, where a coarse
         # garment spans a sharp shape (MB-Lab's nipples) as a chord. Under a loose skirt or a wide trouser hem the
         # skin stays, else one would look into the garment there.
         hide = hidden_skin(dst, placed, atris, border_of(atris, placed), margin=0.004, reach=(0.02, 0.035))

@@ -48,7 +48,12 @@ const std::unordered_map<std::string_view, const char*>& translations() {
         {"SPRACHE", "LANGUAGE"}, {"Sprache", "Language"}, {"GARDEROBE", "WARDROBE"}, {"Garderobe", "Wardrobe"},
         {"Installiert", "Installed"}, {"Nicht installiert", "Not installed"},
         {"Neu laden (%.0f MB)", "Download again (%.0f MB)"}, {"Herunterladen (%.0f MB)", "Download (%.0f MB)"},
-        {"Herunterladen", "Download"}, {"Erneut versuchen", "Try again"}, {"Später", "Later"},
+        {"Herunterladen", "Download"}, {"Weiterspielen", "Continue"}, {"Neues Spiel", "New game"},
+        {"Spiel laden", "Load game"}, {"Spiel speichern", "Save game"}, {"Hauptmenü", "Main menu"},
+        {"Automatisch gespeichert", "Autosave"}, {"Spielstand %d", "Save %d"}, {"leer", "empty"},
+        {"Lade Welt ...", "Loading world ..."}, {"Gespeichert", "Saved"},
+        {"Gelände, Bäume und Gras werden aus echten Geodaten erzeugt.",
+         "Terrain, trees and grass are generated from real geodata."}, {"Erneut versuchen", "Try again"}, {"Später", "Later"},
         {"Für deinen Charakter gibt es rund 300 Kleidungsstücke, Schuhe, Unterwäsche und Accessoires. Sie werden "
          "einmalig heruntergeladen und eingerichtet.",
          "There are about 300 garments, shoes, underwear and accessories for your character. They are downloaded and "

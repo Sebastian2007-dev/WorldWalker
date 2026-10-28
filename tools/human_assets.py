@@ -55,7 +55,7 @@ GERMAN = {"t": "T", "shirt": "Shirt", "tshirt": "T-Shirt", "sweater": "Pullover"
           "cardigan": "Strickjacke", "kimono": "Kimono", "robe": "Robe", "apron": "Schürze", "coveralls": "Overall",
           "wetsuit": "Neoprenanzug", "jumpsuit": "Overall", "romper": "Einteiler", "camisole": "Hemdchen",
           "stiletto": "Stiletto", "booties": "Stiefeletten", "platform": "Plateau", "warmer": "Stulpen",
-          "optical": "Korrektur", "round": "runde", "frames": "Gestell", "medical": "medizinische", "mask": "Maske"}
+          "optical": "Korrektur", "fishnet": "Netz", "large": "grob", "medium": "mittel", "small": "fein", "round": "runde", "frames": "Gestell", "medical": "medizinische", "mask": "Maske"}
 
 
 def labels(key):
@@ -63,7 +63,8 @@ def labels(key):
     words = [w for w in re.split(r"[^a-z0-9]+", key.lower()) if w]
     if len(words) > 1:
         words = words[1:]
-    words = [w for w in words if not re.fullmatch(r"\d+|[a-z]?\d+[a-z]?", w)] or words
+    # Numbers stay (dress 1, dress 2), without leading zeros; "f"/"m" mean the cut.
+    words = [str(int(w)) if w.isdigit() else {"f": "female", "m": "male"}.get(w, w) for w in words]
     english = " ".join(words)
     german = " ".join(g for g in (GERMAN.get(w, w) for w in words) if g)
     return german[:1].upper() + german[1:], english[:1].upper() + english[1:]
@@ -165,6 +166,27 @@ def asset_name(kind, mhclo_path):
     return kind + "_" + re.sub(r"[^a-z0-9]+", "_", (info_name or os.path.basename(mhclo_path)).lower()).strip("_")
 
 
+def transparency(path, uvs):
+    """Share of the texture's area the asset uses (its triangles' uv points) that is transparent: lace edges are a few
+    per cent, fishnet half. Transparent texels outside the uv islands don't count."""
+    try:
+        import numpy
+        from PIL import Image
+        img = Image.open(path)
+    except Exception:
+        return 0.0
+    if img.mode != "RGBA" or not len(uvs):
+        return 0.0
+    a = numpy.asarray(img.getchannel("A"), numpy.float32) / 255.0
+    h, w = a.shape
+    rng = numpy.random.default_rng(0)
+    bary = rng.dirichlet([1, 1, 1], size=(len(uvs), 8))
+    pts = numpy.einsum("tkj,tjc->tkc", bary, numpy.asarray(uvs)).reshape(-1, 2)
+    x = numpy.clip((pts[:, 0] % 1) * w, 0, w - 1).astype(int)
+    y = numpy.clip((pts[:, 1] % 1) * h, 0, h - 1).astype(int)
+    return float((a[y, x] < 0.5).mean())
+
+
 def write_asset(kind, mhclo_path, out, asset_dir, copy_texture):
     """Fitted asset: every render vertex follows three base vertices plus an offset scaled by the body's size
     (MakeHuman's proxy fitting, evaluated by the engine for every body shape). copy_texture(path, name) copies a
@@ -201,6 +223,7 @@ def write_asset(kind, mhclo_path, out, asset_dir, copy_texture):
     nrm = mat.get("normalmapTexture")
     normal = None if nrm and "objnorm" in os.path.basename(nrm).lower() else copy_texture(nrm, name + "_nrm")
     alpha_tex = mat.get("transparencyMapTexture")
+    holes = transparency(os.path.join(out, albedo), [[rverts[k][3:5] for k in t] for t in tris]) if albedo else 0.0
     # asset_<name>.bin: u32 R; R x (u32x3 refs, float3 weights, float3 offset, float u, float v); u32 T, T x u32x3;
     #                   u8 has_scale + 3 x (u32 a, u32 b, float reference); u32 D, D x u32 deleted base vertices
     with open(os.path.join(out, "asset_" + name + ".bin"), "wb") as f:
@@ -216,7 +239,8 @@ def write_asset(kind, mhclo_path, out, asset_dir, copy_texture):
         f.write(np.asarray(info["delete"], np.uint32).tobytes())
     log("asset", kind, name, len(rverts), "vertices", len(tris), "triangles", "delete", len(info["delete"]))
     return {"kind": kind, "name": name, "file": "asset_" + name + ".bin", "albedo": albedo, "normal": normal,
-            "alphaTest": kind in ("hair", "eyebrows", "eyelashes", "eyes") or bool(alpha_tex), "zDepth": info["z_depth"],
+            "alphaTest": kind in ("hair", "eyebrows", "eyelashes", "eyes") or bool(alpha_tex) or holes > 0.02,
+            "seeThrough": holes > 0.15, "zDepth": info["z_depth"],
             "color": mat.get("diffuseColor")}
 
 

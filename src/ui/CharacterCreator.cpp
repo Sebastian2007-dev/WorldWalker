@@ -243,7 +243,11 @@ bool picker(const char* text, const char* id, const std::vector<std::string>& en
     ImGui::SameLine(0,gap);
     ImGui::SetNextItemWidth(std::max(arrow,field-2*arrow-2*gap-theme::scale(12)));
     if(ImGui::BeginCombo("##list",entries[size_t(selected)].c_str(),ImGuiComboFlags_NoArrowButton)) {
-        for(int i=0;i<n;++i) if(ImGui::Selectable(entries[size_t(i)].c_str(),i==selected)) selected=i;
+        for(int i=0;i<n;++i) {
+            ImGui::PushID(i);
+            if(ImGui::Selectable(entries[size_t(i)].c_str(),i==selected)) selected=i;
+            ImGui::PopID();
+        }
         ImGui::EndCombo();
     }
     ImGui::SameLine(0,gap);
@@ -264,6 +268,10 @@ template<class Match> bool assetSlot(render::Human& human, const char* text, con
     }
     if(names.empty() || (none && names.size()==1)) return false;
     // Alphabetical, so related styles ("Bob, ...") sit together; "Keine" stays first.
+    // Entries with the same label get a number, so they can be told apart.
+    std::map<std::string,int> seen, count;
+    for(auto& e:entries) ++count[e];
+    for(auto& e:entries) if(count[e]>1 && ++seen[e]>1) e+=" "+std::to_string(seen[e]);
     std::vector<size_t> order(names.size());
     for(size_t i=0;i<order.size();++i) order[i]=i;
     std::stable_sort(order.begin()+(none?1:0),order.end(),[&](size_t a,size_t b) { return entries[a]<entries[b]; });

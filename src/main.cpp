@@ -33,6 +33,7 @@
 #include "data/Http.h"
 #include "data/CogFile.h"
 #include "data/Wardrobe.h"
+#include "game/SaveGame.h"
 
 namespace fs = std::filesystem;
 
@@ -73,6 +74,7 @@ int main(int argc, char** argv) {
     const char* humanDir = "mblab";  // --human human: the MakeHuman body (bake_human.py) instead of MB-Lab's
     bool creatorClothes = false;  // --creator-clothes: the preview shows the outfit
     bool creatorStrip = false;    // --creator-strip: no clothes but those given with --creator-asset
+    bool titleShot = false;       // --title: with --shot, the main menu on the screenshot (checks)
     bool installWardrobe = false; // --install-wardrobe: download and unpack the wardrobe, then exit (checks, servers)
     std::vector<std::pair<std::string, float>> creatorSet;  // --creator-set key=value (numeric appearance values)
     bool thirdPerson = false, timeGiven = false, noShadows = false, noGrass = false, noTaa = false, noSsao = false;
@@ -95,6 +97,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--creator-clothes")) creatorClothes = true;
         else if (!std::strcmp(argv[i], "--creator-strip")) creatorStrip = true;
         else if (!std::strcmp(argv[i], "--install-wardrobe")) installWardrobe = true;
+        else if (!std::strcmp(argv[i], "--title")) titleShot = true;
         else if (!std::strcmp(argv[i], "--human") && i + 1 < argc) humanDir = argv[++i];
         else if (!std::strcmp(argv[i], "--no-anim")) noAnim = true;
         else if (!std::strcmp(argv[i], "--creator-asset") && i + 1 < argc) creatorAssets.push_back(argv[++i]);
@@ -224,11 +227,13 @@ int main(int argc, char** argv) {
     ui::CharacterCreator creator;
     game::Player::View previousView = player.view;
     float previousDistance = player.thirdPersonDistance, previousYaw = yaw, previousPitch = pitch;
+    bool creatorFromTitle = false;
     auto openCreator = [&] {
         if (!human.ready()) { std::fprintf(stderr,"Character creator data unavailable\n"); return; }
         previousView = player.view; previousDistance = player.thirdPersonDistance;
         previousYaw = player.heading() * 57.29578f;
         previousPitch = player.lookPitch() * 57.29578f;
+        creatorFromTitle = menu.isTitle();
         creator.open(human); menu.close(); player.view = game::Player::View::ThirdPerson;
         captureMouse(app,false);
     };
@@ -241,7 +246,10 @@ int main(int argc, char** argv) {
         }
         player.view = previousView; player.thirdPersonDistance = previousDistance;
         player.setLook(previousYaw,previousPitch);
-        if (!shotPath) menu.open(player.lat(),player.lon());
+        if (!shotPath) {
+            if (creatorFromTitle) menu.openTitle(fs::exists(game::savePath(assetDir.parent_path(), 0)));
+            else menu.open(player.lat(),player.lon());
+        }
     };
     if (creatorRequested) openCreator();
     if (creator.isOpen() && creatorTemplate) {
@@ -311,6 +319,49 @@ int main(int argc, char** argv) {
         std::printf("wardrobe: %s %s\n", wardrobe.installed() ? "installed" : "failed", wardrobe.error().c_str());
         return wardrobe.installed() ? 0 : 1;
     }
+    // ---- Main menu, loading screen, saved games (game/SaveGame).
+    const fs::path root = assetDir.parent_path();
+    bool loading = !shotPath;          // the loading screen covers the world until it has streamed in
+    float loadingSince = 0, loadingPeak = 1;
+    int loadingIdle = 0;
+    auto startLoading = [&] { loading = !shotPath; loadingSince = -1; loadingPeak = 1; loadingIdle = 0; };
+    auto refreshSlots = [&] {
+        for (int i = 0; i <= game::kSaveSlots; ++i) {
+            game::SaveGame s;
+            menu.slots[i] = {};
+            if (!game::readSave(game::savePath(root, i), s)) continue;
+            char where[64];
+            std::snprintf(where, sizeof(where), "%.2f\xC2\xB0 %s  %.2f\xC2\xB0 %s", std::abs(s.lat), s.lat >= 0 ? "N" : "S",
+                          std::abs(s.lon), s.lon >= 0 ? ui::tr("O") : "W");
+            menu.slots[i] = {true, game::saveTime(s.savedAt), where};
+        }
+    };
+    auto currentSave = [&] {
+        game::SaveGame s;
+        s.lat = player.lat(); s.lon = player.lon();
+        s.yawDeg = player.heading() * 57.29578f; s.pitchDeg = player.lookPitch() * 57.29578f;
+        s.thirdPerson = player.view == game::Player::View::ThirdPerson; s.flying = player.flying;
+        s.timeOfDay = params.timeOfDay; s.dayOfYear = params.dayOfYear;
+        if (human.ready() && human.state.value("enabled", false)) s.character = human.state;
+        s.savedAt = int64_t(std::time(nullptr));
+        return s;
+    };
+    auto applySave = [&](const game::SaveGame& s) {
+        player.flying = s.flying;
+        player.spawn(s.lat, s.lon, data);
+        player.setLook(s.yawDeg, s.pitchDeg);
+        player.view = s.thirdPerson ? game::Player::View::ThirdPerson : game::Player::View::FirstPerson;
+        params.timeOfDay = s.timeOfDay; params.dayOfYear = s.dayOfYear;
+        if (human.ready() && s.character.is_object()) {
+            human.state = s.character;
+            if (human.rebuild(character)) human.savePreset(characterFile);
+        }
+        startLoading();
+    };
+    if ((!shotPath || titleShot) && !creatorRequested) {
+        refreshSlots();
+        menu.openTitle(menu.slots[0].used);
+    }
     // First start: pick a preset that suits this GPU.
     if (settings.quality < 0) {
         settings.quality = ui::detectQuality(dev.integratedGpu(), dev.deviceLocalBytes());
@@ -355,6 +406,7 @@ int main(int argc, char** argv) {
         }
 
         if (!shotPath) {
+            if (loading) app.escape = false;  // nothing to go back to while the world loads
             if (app.escape && !ImGui::GetIO().WantTextInput) {
                 if (wardrobeShown) wardrobeShown = false;  // a running download goes on in the background
                 else if (creator.isOpen()) finishCreator(creator.cancel(human));
@@ -365,7 +417,7 @@ int main(int argc, char** argv) {
             bool uiOpen = menu.isOpen() || creator.isOpen() || wardrobeShown;
             if (uiOpen == app.mouseCaptured) captureMouse(app, !uiOpen);
         }
-        bool paused = menu.isOpen() || creator.isOpen() || wardrobeShown;
+        bool paused = menu.isOpen() || creator.isOpen() || wardrobeShown || loading;
         if (creator.isOpen()) {
             player.view = game::Player::View::ThirdPerson;
             player.setLook(player.bodyHeading()*57.29578f + creator.view.orbit, creator.view.pitch);
@@ -483,8 +535,9 @@ int main(int argc, char** argv) {
             ImGui::Text("Bäume: %zu in %zu Zellen", veg.instanceCount(), veg.activeCells());
             ImGui::End();
         }
-        if (!shotPath) {
-            switch (menu.draw(app.window, settings, params, player)) {
+        if (!shotPath || titleShot) {
+            auto action = menu.draw(app.window, settings, params, player);
+            switch (action) {
                 case ui::PauseMenu::Action::Resume:
                     menu.close();
                     ui::saveSettings(settingsFile, settings, params, player);
@@ -492,6 +545,34 @@ int main(int argc, char** argv) {
                 case ui::PauseMenu::Action::Teleport:
                     player.spawn(menu.teleportLat, menu.teleportLon, data);
                     menu.close();
+                    startLoading();
+                    break;
+                case ui::PauseMenu::Action::NewGame:
+                    player.flying = false;
+                    player.spawn(startLat, startLon, data);
+                    player.setLook(yaw, pitch);
+                    menu.close();
+                    startLoading();
+                    break;
+                case ui::PauseMenu::Action::Continue:
+                case ui::PauseMenu::Action::Load: {
+                    game::SaveGame s;
+                    int slot = action == ui::PauseMenu::Action::Continue ? 0 : menu.slot;
+                    if (game::readSave(game::savePath(root, slot), s)) {
+                        applySave(s);
+                        menu.close();
+                    }
+                    break;
+                }
+                case ui::PauseMenu::Action::Save:
+                    game::writeSave(game::savePath(root, menu.slot), currentSave());
+                    refreshSlots();
+                    break;
+                case ui::PauseMenu::Action::MainMenu:
+                    game::writeSave(game::savePath(root, 0), currentSave());
+                    ui::saveSettings(settingsFile, settings, params, player);
+                    refreshSlots();
+                    menu.openTitle(true);
                     break;
                 case ui::PauseMenu::Action::Quit: glfwSetWindowShouldClose(app.window, GLFW_TRUE); break;
                 case ui::PauseMenu::Action::CharacterCreator: openCreator(); break;
@@ -511,7 +592,7 @@ int main(int argc, char** argv) {
             human.load(assetDir / "baked" / humanDir);
             if (human.ready() && human.loadPreset(characterFile) && human.state.value("enabled", true)) human.rebuild(character);
         }
-        if (wardrobeShown) {
+        if (wardrobeShown && !loading) {
             using Stage = ui::WardrobeScreen::Stage;
             ui::WardrobeScreen screen;
             screen.megabytes = settings.wardrobeMegabytes;
@@ -534,6 +615,19 @@ int main(int argc, char** argv) {
                     break;
                 case ui::WardrobeChoice::None: break;
             }
+        }
+        // Loading screen: until the ground under the player is there and the streaming has been idle for a moment
+        // (40 s at most), progress from how much of the queue has been worked off.
+        if (loading) {
+            if (loadingSince < 0) loadingSince = time;
+            float pending = float(jobs.pending() + terrain.inFlight());
+            loadingPeak = std::max(loadingPeak, pending);
+            bool busy = player.waitingForGround() || pending > 0;
+            loadingIdle = busy ? 0 : loadingIdle + 1;
+            float progress = player.waitingForGround() ? 0.1f * std::min((time - loadingSince) / 3.0f, 1.0f)
+                                                       : 0.1f + 0.9f * (1.0f - pending / loadingPeak);
+            ui::drawLoadingScreen(loadingIdle > 0 ? 1.0f : progress, time);
+            if (loadingIdle > 30 || time - loadingSince > 40.0f) loading = false;
         }
         params.menuFade = creator.isOpen() ? 0.0f : menu.fade();
         params.studio += ((creator.isOpen() ? 1.0f : 0.0f) - params.studio) * std::min(dt * 4.0f, 1.0f);
@@ -581,7 +675,10 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (!shotPath) ui::saveSettings(settingsFile, settings, params, player);
+    if (!shotPath) {
+        ui::saveSettings(settingsFile, settings, params, player);
+        if (!menu.isTitle()) game::writeSave(game::savePath(root, 0), currentSave());  // playing: autosave on quit
+    }
     data::GeoRaster::beginShutdown();
     glfwHideWindow(app.window);
     dev.waitIdle();

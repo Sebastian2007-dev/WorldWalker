@@ -61,13 +61,25 @@ struct WardrobeScreen {
 enum class WardrobeChoice { None, Install, Later };
 WardrobeChoice drawWardrobeScreen(const WardrobeScreen& screen);
 
+// Full screen while the world around the player loads: progress 0..1, time drives the spinner.
+void drawLoadingScreen(float progress, float time);
+
+// A save slot as the menu lists it.
+struct SaveSlot {
+    bool used = false;
+    std::string when, where;  // "28.10.2026 14:05", "47.87° N 8.00° O"
+};
+
 class PauseMenu {
 public:
-    enum class Action { None, Resume, Quit, Teleport, CharacterCreator };
+    enum class Action { None, Resume, Quit, Teleport, CharacterCreator, NewGame, Continue, Save, Load, MainMenu };
 
     bool isOpen() const { return open_; }
     float fade() const { return fade_; }
     void open(double lat, double lon);
+    // The main menu: before the game starts (and after "Hauptmenü"); Esc does not close it.
+    void openTitle(bool canContinue);
+    bool isTitle() const { return title_; }
     void close() { open_ = false; }
     void back();  // Esc: leave a sub page, or close from the main page
 
@@ -75,14 +87,17 @@ public:
     Action draw(GLFWwindow* window, Settings& s, render::SceneParams& p, game::Player& player);
 
     double teleportLat = 0, teleportLon = 0;
+    int slot = 0;                                  // Save / Load: the chosen slot (0 = autosave, Load only)
+    SaveSlot slots[6];                             // index 0: autosave; set by the caller before draw
 
 private:
-    enum class Page { Main, Options, Teleport };
+    enum class Page { Main, Options, Teleport, Save, Load };
     Action drawMain(const game::Player& player);
+    Action drawSlots(bool saving);
     void drawOptions(GLFWwindow* window, Settings& s, render::SceneParams& p, game::Player& player);
     Action drawTeleport();
 
-    bool open_ = false;
+    bool open_ = false, title_ = false, canContinue_ = false;
     Page page_ = Page::Main;
     int tab_ = 0;
     float fade_ = 0;

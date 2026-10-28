@@ -674,10 +674,38 @@ WardrobeChoice drawWardrobeScreen(const WardrobeScreen& screen) {
     return choice;
 }
 
+// ---------------------------------------------------------------- loading screen
+
+void drawLoadingScreen(float progress, float time) {
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    ImVec2 vs = ImGui::GetIO().DisplaySize;
+    dl->AddRectFilledMultiColor(ImVec2(0, 0), vs, col(0x1B232B), col(0x1B232B), col(kInk), col(kInk));
+    float x0 = std::max(vs.x * 0.07f, S(48)), y = vs.y * 0.62f, width = std::min(S(620), vs.x * 0.6f);
+    shadowText(dl, g_fonts.title, ImVec2(x0, y - g_fonts.title->FontSize - S(30)), col(kText), "WorldWalker");
+    const char* text = tr("Lade Welt ...");
+    ImVec2 c(x0 + S(12), y + S(10));
+    dl->PathArcTo(c, S(8), time * 6.0f, time * 6.0f + 4.5f, 24);
+    dl->PathStroke(col(kAccent), 0, S(2.5f));
+    dl->AddText(g_fonts.body, g_fonts.body->FontSize, ImVec2(x0 + S(32), y + S(10) - g_fonts.body->FontSize * 0.5f),
+                col(kText), text);
+    float by = y + S(36), h = S(6);
+    dl->AddRectFilled(ImVec2(x0, by), ImVec2(x0 + width, by + h), col(0xFFFFFF, 0.1f), h * 0.5f);
+    dl->AddRectFilled(ImVec2(x0, by), ImVec2(x0 + width * std::clamp(progress, 0.02f, 1.0f), by + h), col(kAccent), h * 0.5f);
+    const char* hint = tr("Gel\xC3\xA4nde, B\xC3\xA4ume und Gras werden aus echten Geodaten erzeugt.");
+    dl->AddText(g_fonts.small, g_fonts.small->FontSize, ImVec2(x0, by + S(22)), col(kTextDim), hint);
+}
+
 // ---------------------------------------------------------------- pause menu
+
+void PauseMenu::openTitle(bool canContinue) {
+    open_ = title_ = true;
+    canContinue_ = canContinue;
+    page_ = Page::Main;
+}
 
 void PauseMenu::open(double lat, double lon) {
     open_ = true;
+    title_ = false;
     page_ = Page::Main;
     std::snprintf(latBuf_, sizeof(latBuf_), "%.5f", lat);
     std::snprintf(lonBuf_, sizeof(lonBuf_), "%.5f", lon);
@@ -685,7 +713,7 @@ void PauseMenu::open(double lat, double lon) {
 
 void PauseMenu::back() {
     if (page_ != Page::Main) page_ = Page::Main;
-    else open_ = false;
+    else if (!title_) open_ = false;
 }
 
 PauseMenu::Action PauseMenu::draw(GLFWwindow* window, Settings& s, render::SceneParams& p, game::Player& player) {
@@ -715,11 +743,12 @@ PauseMenu::Action PauseMenu::draw(GLFWwindow* window, Settings& s, render::Scene
     float top = vs.y * 0.16f;
     Action action = Action::None;
 
-    const char* title = page_ == Page::Main ? "WorldWalker" : page_ == Page::Options ? tr("Optionen") : "Teleport";
+    const char* title = page_ == Page::Main ? "WorldWalker" : page_ == Page::Options ? tr("Optionen")
+                        : page_ == Page::Save ? tr("Spiel speichern") : page_ == Page::Load ? tr("Spiel laden") : "Teleport";
     ImVec2 ts = textSize(g_fonts.title, title);
     shadowText(dl, g_fonts.title, ImVec2(x0, top), col(kText), title);
     float y = top + ts.y + S(2);
-    if (page_ == Page::Main) {
+    if (page_ == Page::Main && !title_) {
         char buf[128];
         formatLatLon(buf, sizeof(buf), player.lat(), player.lon());
         dl->AddText(g_fonts.body, g_fonts.body->FontSize, ImVec2(x0 + S(4), y), col(kTextDim), buf);
@@ -732,9 +761,11 @@ PauseMenu::Action PauseMenu::draw(GLFWwindow* window, Settings& s, render::Scene
         case Page::Main: action = drawMain(player); break;
         case Page::Options: drawOptions(window, s, p, player); break;
         case Page::Teleport: action = drawTeleport(); break;
+        case Page::Save: action = drawSlots(true); break;
+        case Page::Load: action = drawSlots(false); break;
     }
 
-    const char* hint = tr(page_ == Page::Main ? "Esc  Zur\xC3\xBC" "ck zum Spiel" : "Esc  Zur\xC3\xBC" "ck");
+    const char* hint = page_ == Page::Main && title_ ? "" : tr(page_ == Page::Main ? "Esc  Zur\xC3\xBC" "ck zum Spiel" : "Esc  Zur\xC3\xBC" "ck");
     dl->AddText(g_fonts.small, g_fonts.small->FontSize, ImVec2(x0 + S(4), vs.y - S(48)), col(kTextDim, 0.8f), hint);
 
     ImGui::End();
@@ -750,12 +781,59 @@ PauseMenu::Action PauseMenu::drawMain(const game::Player&) {
         return menuItem(label, w);
     };
     Action a = Action::None;
+    bool anySave = false;
+    for (auto& s : slots) anySave |= s.used;
+    if (title_) {
+        if (canContinue_ && item("Weiterspielen")) a = Action::Continue;
+        if (item("Neues Spiel")) a = Action::NewGame;
+        if (anySave && item("Spiel laden")) page_ = Page::Load;
+        if (item("Charakter erstellen")) a = Action::CharacterCreator;
+        if (item("Optionen")) page_ = Page::Options;
+        ImGui::Dummy(ImVec2(0, S(10)));
+        if (item("Beenden")) a = Action::Quit;
+        return a;
+    }
     if (item("Fortsetzen")) a = Action::Resume;
+    if (item("Spiel speichern")) page_ = Page::Save;
+    if (anySave && item("Spiel laden")) page_ = Page::Load;
     if (item("Charakter erstellen")) a = Action::CharacterCreator;
     if (item("Teleport")) page_ = Page::Teleport;
     if (item("Optionen")) page_ = Page::Options;
     ImGui::Dummy(ImVec2(0, S(10)));
+    if (item("Hauptmen\xC3\xBC")) a = Action::MainMenu;
     if (item("Beenden")) a = Action::Quit;
+    return a;
+}
+
+PauseMenu::Action PauseMenu::drawSlots(bool saving) {
+    float width = std::min(S(680), ImGui::GetIO().DisplaySize.x * 0.6f);
+    float x = ImGui::GetCursorScreenPos().x - S(22);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    Action a = Action::None;
+    // Saving: the five slots. Loading: the autosave first, then the used slots.
+    for (int i = saving ? 1 : 0; i < 6; ++i) {
+        const SaveSlot& s = slots[i];
+        if (!saving && !s.used) continue;
+        char name[64];
+        if (i == 0) std::snprintf(name, sizeof(name), "%s", tr("Automatisch gespeichert"));
+        else std::snprintf(name, sizeof(name), tr("Spielstand %d"), i);
+        ImGui::SetCursorScreenPos(ImVec2(x, ImGui::GetCursorScreenPos().y));
+        ImVec2 pos = ImGui::GetCursorScreenPos();
+        ImGui::PushID(i);
+        if (menuItem(name, width + S(22), g_fonts.body)) {
+            slot = i;
+            a = saving ? Action::Save : Action::Load;
+        }
+        ImGui::PopID();
+        std::string info = s.used ? s.when + "   " + s.where : std::string(tr("leer"));
+        ImVec2 rs = textSize(g_fonts.small, info.c_str());
+        float h = g_fonts.body->FontSize * 1.55f;
+        dl->AddText(g_fonts.small, g_fonts.small->FontSize, ImVec2(x + width + S(22) - rs.x - S(12), pos.y + (h - rs.y) * 0.5f),
+                    col(kTextDim), info.c_str());
+    }
+    ImGui::Dummy(ImVec2(0, S(10)));
+    ImGui::SetCursorScreenPos(ImVec2(x, ImGui::GetCursorScreenPos().y));
+    if (menuItem("Zur\xC3\xBC" "ck", S(300), g_fonts.body)) page_ = Page::Main;
     return a;
 }
 
