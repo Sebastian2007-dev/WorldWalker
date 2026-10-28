@@ -128,6 +128,30 @@ def inner_shell(v, joint):
     return cap[list(bins.values())]
 
 
+def lift_bangs(x, eyes):
+    """Anime heads have their eyes low, so the bangs made for them hang over a realistic face down to the nose. In
+    front of the face the hair between the hairline and the lowest bang tip is squashed upwards until the tips end at
+    the brows; strands at the sides of the face and below the mouth keep their place."""
+    centre = (eyes[0] + eyes[1]) / 2
+    brow, hairline, mouth = centre[2] + 0.018, centre[2] + 0.06, centre[2] - 0.06
+
+    def smooth(a, b, t):
+        t = np.clip((t - a) / (b - a), 0, 1)
+        return t * t * (3 - 2 * t)
+
+    face = (1 - smooth(0.055, 0.08, np.abs(x[:, 0]))) * smooth(centre[1] - 0.05, centre[1] - 0.03, x[:, 1])
+    bangs = (face > 0.5) & (x[:, 2] > mouth) & (x[:, 2] < hairline)
+    if not bangs.any() or x[bangs, 2].min() >= brow:
+        return x
+    tip = x[bangs, 2].min()
+    z = x[:, 2]
+    lifted = np.where(z >= tip, hairline - (hairline - z) * (hairline - brow) / (hairline - tip), z + brow - tip)
+    weight = face * smooth(mouth - 0.02, mouth, z) * (z < hairline)
+    x = x.copy()
+    x[:, 2] = z + weight * (lifted - z)
+    return x
+
+
 def select(faces, group, material=None):
     return [c for g, m, c in faces if g == group and (material is None or m == material)]
 
@@ -301,12 +325,17 @@ def fit(spec, sex, body, source):
             for m in range(1, len(ids) - 1):
                 out_tris.append((ids[0], ids[m], ids[m + 1]))
     used = np.unique([rv[0] for rv in rverts])
-    pos = {}
+    moved = []
     for i in used:
         x = place(v[i])
         nb = tree.find_n(x, 8)
         w = np.array([1.0 / max(d, 1e-4) for _, _, d in nb])
-        x = x + (disp[[j for _, j, _ in nb]] * w[:, None]).sum(0) / w.sum()
+        moved.append(x + (disp[[j for _, j, _ in nb]] * w[:, None]).sum(0) / w.sum())
+    moved = np.array(moved)
+    if "fbx" in spec:
+        moved = lift_bangs(moved, eye_centres(eye_points))
+    pos = {}
+    for i, x in zip(used, moved):
         # Under the skin: out along the surface normal, a millimetre above it.
         loc, n, _, _ = carrier.find_nearest(Vector(x))
         if loc is not None and (x - np.array(loc)) @ np.array(n) < 0.001:
