@@ -633,6 +633,8 @@ WardrobeChoice drawWardrobeScreen(const WardrobeScreen& screen) {
     shadowText(dl, g_fonts.title, ImVec2(x0, top), col(kText), tr("Garderobe"));
     float y = top + g_fonts.title->FontSize + S(6);
     dl->AddRectFilled(ImVec2(x0 + S(4), y + S(10)), ImVec2(x0 + S(52), y + S(13)), col(kAccent), S(1.5f));
+    // Indent so every new line starts at the text column, not at the window's left edge.
+    ImGui::Indent(x0 + S(4));
     ImGui::SetCursorScreenPos(ImVec2(x0 + S(4), y + S(36)));
     ImGui::PushTextWrapPos(x0 + width);
     WardrobeChoice choice = WardrobeChoice::None;
@@ -670,6 +672,7 @@ WardrobeChoice drawWardrobeScreen(const WardrobeScreen& screen) {
         ImGui::TextDisabled("%s", tr("Du kannst währenddessen weiterspielen, wenn du das Fenster schließt: Esc."));
     }
     ImGui::PopTextWrapPos();
+    ImGui::Unindent(x0 + S(4));
     ImGui::End();
     return choice;
 }

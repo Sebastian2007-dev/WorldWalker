@@ -535,7 +535,7 @@ int main(int argc, char** argv) {
             ImGui::Text("Bäume: %zu in %zu Zellen", veg.instanceCount(), veg.activeCells());
             ImGui::End();
         }
-        if (!shotPath || titleShot) {
+        if ((!shotPath || titleShot) && !(wardrobeShown && !loading)) {  // the wardrobe screen covers the menu
             auto action = menu.draw(app.window, settings, params, player);
             switch (action) {
                 case ui::PauseMenu::Action::Resume:
