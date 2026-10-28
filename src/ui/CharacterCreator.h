@@ -16,6 +16,7 @@ public:
     float previewLeft = 0;  // where the free preview area starts, as a fraction of the window width
     void setView(const View& v) { view = target_ = v; }
     void limitPitch(float maxPitch);  // keeps the camera above the ground (see main)
+    void showClothes(bool on) { showClothes_ = on; dirty_ = true; }  // the preview with the outfit (checks)
 private:
     View target_;
     bool dragging_ = false, panning_ = false;

@@ -70,6 +70,7 @@ int main(int argc, char** argv) {
     bool noAnim = false;
     std::vector<std::string> creatorAssets;  // --creator-asset <name>: replaces the selected asset of that kind  // --no-anim: the character stays in its bind pose
     const char* humanDir = "mblab";  // --human human: the MakeHuman body (bake_human.py) instead of MB-Lab's
+    bool creatorClothes = false;  // --creator-clothes: the preview shows the outfit
     std::vector<std::pair<std::string, float>> creatorSet;  // --creator-set key=value (numeric appearance values)
     bool thirdPerson = false, timeGiven = false, noShadows = false, noGrass = false, noTaa = false, noSsao = false;
     float clouds = -1.0f;
@@ -88,6 +89,7 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--creator-distance") && i + 1 < argc) creatorDistance = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--creator-orbit") && i + 1 < argc) creatorOrbit = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--creator-nude")) creatorNude = true;
+        else if (!std::strcmp(argv[i], "--creator-clothes")) creatorClothes = true;
         else if (!std::strcmp(argv[i], "--human") && i + 1 < argc) humanDir = argv[++i];
         else if (!std::strcmp(argv[i], "--no-anim")) noAnim = true;
         else if (!std::strcmp(argv[i], "--creator-asset") && i + 1 < argc) creatorAssets.push_back(argv[++i]);
@@ -192,7 +194,11 @@ int main(int argc, char** argv) {
     character.loadBakedMesh(assetDir / "baked" / "character");
     if (noAnim) character.setAnimated(false);
     render::Human human;
-    human.load(assetDir / "baked" / humanDir);
+    {
+        auto t0 = std::chrono::steady_clock::now();
+        human.load(assetDir / "baked" / humanDir);
+        std::printf("Human: loaded in %.1f s\n", std::chrono::duration<float>(std::chrono::steady_clock::now() - t0).count());
+    }
     fs::path characterFile = assetDir.parent_path() / "character.json";
     if (human.ready()) {
         if (human.loadPreset(characterFile)) {
@@ -248,12 +254,20 @@ int main(int argc, char** argv) {
                 auto& selected = human.state["assets"];
                 for (auto it = selected.begin(); it != selected.end();) {
                     bool sameKind = false;
-                    for (auto& b : human.catalog()["assets"]) sameKind |= b["name"] == *it && b["kind"] == a["kind"];
+                    // Clothes: the same slot, so outfits can be put together; an outfit replaces top and bottom.
+                    std::string slot = render::Human::clothingSlot(a);
+                    for (auto& b : human.catalog()["assets"]) {
+                        if (b["name"] != *it || b["kind"] != a["kind"]) continue;
+                        std::string other = render::Human::clothingSlot(b);
+                        sameKind |= other == slot || (slot == "outfit" && (other == "top" || other == "bottom")) ||
+                                    ((slot == "top" || slot == "bottom") && other == "outfit");
+                    }
                     it = sameKind ? selected.erase(it) : it + 1;
                 }
                 selected.push_back(name);
             }
     if (creator.isOpen()) for (auto& [key, value] : creatorSet) human.state[key] = value;
+    if (creator.isOpen() && creatorClothes) creator.showClothes(true);
     if (creatorDistance > 0.0f || creatorOrbit >= 0.0f || creatorLift != 0.0f) {
         ui::CharacterCreator::View view;
         if (creatorDistance > 0.0f) view.distance = creatorDistance;

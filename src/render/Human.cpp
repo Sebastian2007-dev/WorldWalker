@@ -68,6 +68,7 @@ void Human::swapData(Human& o) {
     std::swap(stencilStart_,o.stencilStart_); std::swap(stencil_,o.stencil_); std::swap(facePoints_,o.facePoints_);
     std::swap(neighborStart_,o.neighborStart_); std::swap(neighbors_,o.neighbors_); std::swap(targets_,o.targets_);
     std::swap(realism_,o.realism_); std::swap(assets_,o.assets_); std::swap(meanColors_,o.meanColors_);
+    std::swap(smoothRest_,o.smoothRest_); std::swap(around_,o.around_);
 }
 void Human::activate(bool female) {
     if(other_ && (meta_.value("sex",std::string())=="female")!=female) swapData(*other_);
@@ -156,7 +157,7 @@ bool Human::loadDirectory(const std::filesystem::path& directory) {
             if(p < -1 || p>=int(b)) throw std::runtime_error("Invalid bone parent");
             for(auto key:{"head","tail"}) for(auto& i:bone.at(key)) if(i.get<size_t>()>=base_.size()) throw std::runtime_error("Invalid joint");
         }
-        subdivide(); bindSkinAssets(); reset(); return true;
+        subdivide(); smoothRest_.clear(); around_.clear(); reset(); return true;
     } catch(const std::exception& e) { std::fprintf(stderr,"Human: %s\n",e.what()); base_.clear(); return false; }
 }
 void Human::subdivide() {
@@ -256,11 +257,20 @@ void Human::subdivide() {
     neighborStart_.assign(1,0); neighbors_.clear();
     for(auto& s:adjacent) { neighbors_.insert(neighbors_.end(),s.begin(),s.end()); neighborStart_.push_back(uint32_t(neighbors_.size())); }
 }
-void Human::bindSkinAssets() {
+void Human::bindSkinAsset(size_t a) {
+    if(assets_[a].bound) return;
+    assets_[a].bound=true;
+    // Skin assets, and assets fitted to the body's surface by a transfer ("smooth", bake_mblab_proxies.py).
+    if(!meta_["assets"][a].value("skin",false) && !meta_["assets"][a].value("smooth",false)) return;
     // Rest pose of the smoothed body and the triangles around each of its vertices.
-    std::vector<glm::vec3> rest(stencilStart_.size()-1,glm::vec3(0));
-    for(size_t v=0;v<rest.size();++v) for(uint32_t s=stencilStart_[v];s<stencilStart_[v+1];++s) rest[v]+=base_[stencil_[s].first]*stencil_[s].second;
-    std::vector<std::vector<uint32_t>> around;
+    auto& rest=smoothRest_;
+    auto& around=around_;
+    if(rest.empty()) {
+        rest.assign(stencilStart_.size()-1,glm::vec3(0));
+        for(size_t v=0;v<rest.size();++v) for(uint32_t s=stencilStart_[v];s<stencilStart_[v+1];++s) rest[v]+=base_[stencil_[s].first]*stencil_[s].second;
+        around.resize(rest.size());
+        for(uint32_t t=0;t<triangles_.size();t+=3) for(int k=0;k<3;++k) around[render_[triangles_[t+k]].base].push_back(t);
+    }
     auto closest=[](glm::vec3 p,glm::vec3 a,glm::vec3 b,glm::vec3 c) {
         // Barycentric weights of the point of triangle abc closest to p (Ericson, Real-Time Collision Detection 5.1.5).
         glm::vec3 ab=b-a, ac=c-a, ap=p-a;
@@ -278,12 +288,7 @@ void Human::bindSkinAssets() {
         if(va<=0 && d4-d3>=0 && d5-d6>=0) { float w=(d4-d3)/((d4-d3)+(d5-d6)); return glm::vec3(0,1-w,w); }
         float s=1/(va+vb+vc); return glm::vec3(1-(vb+vc)*s,vb*s,vc*s);
     };
-    for(size_t a=0;a<assets_.size();++a) {
-        if(!meta_["assets"][a].value("skin",false)) continue;
-        if(around.empty()) {
-            around.resize(rest.size());
-            for(uint32_t t=0;t<triangles_.size();t+=3) for(int k=0;k<3;++k) around[render_[triangles_[t+k]].base].push_back(t);
-        }
+    {
         // The point of the coarse body each vertex hangs from moves to the nearest point of the smoothed body; the
         // offset from there stays, so the shape is kept and vertices on the skin stay on it.
         for(auto& v:assets_[a].vertices) {
@@ -335,6 +340,13 @@ void Human::applyTemplate(Template body) {
         if(kind=="genitals") use=!selected[kind] && a.value("sex",std::string())==(female?"female":"male");
         if(use) { state["assets"].push_back(name); selected[kind]=true; }
     }
+}
+std::string Human::clothingSlot(const nlohmann::json& asset) {
+    if(asset.value("kind",std::string())!="clothes") return {};
+    if(asset.contains("slot") && asset["slot"].is_string()) return asset["slot"];
+    // Bakes from before the slots: MakeHuman's system clothes by name.
+    std::string name=asset.value("name",std::string());
+    return name.rfind("clothes_shoes",0)==0?"shoes":name.rfind("clothes_fedora",0)==0?"hat":"outfit";
 }
 void Human::randomize(uint32_t seed) {
     std::mt19937 rng(seed);
@@ -518,17 +530,23 @@ bool Human::rebuild(Character& character, bool hideClothes) {
     completeSelection();
     try {
         std::vector<bool> active(assets_.size());
-        bool outfit=false;
+        for(auto& selected:state["assets"])
+            for(size_t a=0;a<assets_.size();++a) if(meta_["assets"][a]["name"]==selected) bindSkinAsset(a);
+        bool outfit=false, underwearWorn=false, groinCovered=false;
         for(size_t a=0;a<assets_.size();++a) {
             std::string name=meta_["assets"][a]["name"];
             for(auto& selected:state["assets"]) if(selected==name) active[a]=true;
             if(hideClothes && meta_["assets"][a]["kind"]=="clothes") active[a]=false;
-            if(active[a] && name.rfind("clothes_",0)==0 && name.rfind("clothes_shoes",0)!=0 && name.rfind("clothes_fedora",0)!=0) outfit=true;
+            std::string slot=active[a]?clothingSlot(meta_["assets"][a]):std::string();
+            outfit|=slot=="outfit" || slot=="top" || slot=="bottom";
+            underwearWorn|=slot=="underwear" || slot=="undertop";
+            groinCovered|=slot=="outfit" || slot=="bottom" || slot=="underwear";
         }
-        // Underwear covers the body while no outfit is worn; genitals show only when neither covers them (they
-        // would poke through either).
-        const bool underwear=!outfit && state.value("underwear",true);
-        for(size_t a=0;a<assets_.size();++a) if(meta_["assets"][a]["kind"]=="genitals" && (outfit || underwear)) active[a]=false;
+        // The plain underwear covers the body while no clothes and no underwear asset are worn; genitals show only when
+        // nothing covers the groin (they would poke through).
+        const bool underwear=!outfit && !underwearWorn && state.value("underwear",true);
+        for(size_t a=0;a<assets_.size();++a)
+            if(meta_["assets"][a]["kind"]=="genitals" && (groinCovered || underwear)) active[a]=false;
         auto positions=base_;
         // Body morphs that come with a shown asset (genitals flatten the male body's moulded bulge).
         for(size_t a=0;a<assets_.size();++a) if(active[a])
@@ -658,6 +676,43 @@ bool Human::rebuild(Character& character, bool hideClothes) {
         std::vector<OnSkin> onSkin;
         // Strand rigs of the shown hair: their bones follow the skeleton's in the joint palette (Character::setHair).
         std::vector<HairBone> hairBones;
+        // Clothing layers, inside out. Each garment was made alone, so where layers overlap an inner one may stand out
+        // through an outer one (a jeans waistband through a sweater): an inner garment's height over the skin is kept
+        // under that of the layers over it, per body vertex. Accessories take no part.
+        auto layer=[](const std::string& slot) {
+            static const std::map<std::string,int> order={{"legwear",0},{"underwear",1},{"undertop",1},{"shoes",2},
+                                                          {"bottom",3},{"top",4},{"outfit",5}};
+            auto it=order.find(slot); return it==order.end()?-1:it->second;
+        };
+        std::vector<std::vector<float>> ceiling(assets_.size());  // per asset vertex: the most height allowed, metres
+        {
+            std::vector<std::pair<int,size_t>> worn;
+            for(size_t a=0;a<assets_.size();++a)
+                if(active[a] && layer(clothingSlot(meta_["assets"][a]))>=0) worn.push_back({layer(clothingSlot(meta_["assets"][a])),a});
+            std::sort(worn.rbegin(),worn.rend());
+            std::vector<float> outer(positions.size(),std::numeric_limits<float>::max()), mine;
+            for(size_t k=0;k<worn.size();++k) {
+                size_t a=worn[k].second; auto& asset=assets_[a];
+                if(k>0 && worn[k].first<worn[k-1].first) {
+                    // The layers over this one, spread one ring, so a garment's sparse vertices cover the skin between.
+                    std::vector<float> spread=outer;
+                    for(size_t v=0;v<outer.size();++v)
+                        for(uint32_t n=neighborStart_[v];n<neighborStart_[v+1];++n) spread[v]=std::min(spread[v],outer[neighbors_[n]]);
+                    outer.swap(spread);
+                }
+                auto& c=ceiling[a]; c.assign(asset.vertices.size(),std::numeric_limits<float>::max());
+                mine.assign(positions.size(),std::numeric_limits<float>::max());
+                for(size_t vi=0;vi<asset.vertices.size();++vi) {
+                    auto& v=asset.vertices[vi];
+                    float h=glm::length(v.offset)*0.1f;
+                    for(int r=0;r<3;++r) {
+                        c[vi]=std::min(c[vi],outer[v.refs[r]]-0.002f);
+                        if(v.weights[r]>0.2f) mine[v.refs[r]]=std::min(mine[v.refs[r]],h);
+                    }
+                }
+                for(size_t v=0;v<outer.size();++v) outer[v]=std::min(outer[v],mine[v]);
+            }
+        }
         for(size_t a=0;a<assets_.size();++a) if(active[a]) {
             auto& asset=assets_[a]; auto material=meta_["assets"][a];
             if(material["kind"]=="eyes" && !meta_["eyeMaterials"].empty()) material["albedo"]=meta_["eyeMaterials"][std::clamp(state.value("eyes",0),0,int(meta_["eyeMaterials"].size())-1)]["albedo"];
@@ -689,6 +744,10 @@ bool Human::rebuild(Character& character, bool hideClothes) {
             for(size_t vi=0;vi<asset.vertices.size();++vi) {
                 auto& v=asset.vertices[vi];
                 glm::vec3 p=(v.offset+morphed[vi])*scale; std::map<uint32_t,float> influences;
+                if(!ceiling[a].empty()) {
+                    float h=glm::length(p), top=std::max(ceiling[a][vi],0.001f);
+                    if(h>top) p*=top/h;
+                }
                 for(int k=0;k<3;++k) {
                     p+=positions[v.refs[k]]*v.weights[k];
                     for(int j=0;j<4;++j) influences[(joints_[v.refs[k]]>>(j*8))&255]+=v.weights[k]*float((weights_[v.refs[k]]>>(j*8))&255);

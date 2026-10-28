@@ -8,3 +8,4 @@ settings.json
 /character.json.tmp
 tools/downloads/
 ungrouped/
+__pycache__/

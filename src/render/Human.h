@@ -21,6 +21,9 @@ public:
     struct HairShade { const char* name; float rgb[3]; };
     static const std::vector<HairShade>& hairShades();
     static constexpr size_t kNaturalHairShades = 11;
+    // Clothing slot of a catalog asset ("top", "bottom", "outfit", "underwear", "shoes", "hat", ...; see
+    // tools/human_assets.py), empty for other kinds. An outfit covers top and bottom.
+    static std::string clothingSlot(const nlohmann::json& asset);
     bool ready() const { return !base_.empty(); }
     const nlohmann::json& catalog() const { return meta_; }
     nlohmann::json state;
@@ -41,6 +44,7 @@ private:
         struct RigWeights { uint8_t bones[4], weights[4]; };  // weights of 255; the rest stays with the body's joints
         std::vector<RigBone> rig;
         std::vector<RigWeights> rigWeights;
+        bool bound = false;  // rebound to the smoothed body (bindSkinAsset), done when first shown
     };
     // Humans whose sexes have different meshes (tools/blender/bake_mblab.py: <dir>/female, <dir>/male) keep the
     // other sex's data here; activate swaps it in.
@@ -66,9 +70,12 @@ private:
     uint32_t facePoints_ = 0;                      // index of the first face point
     std::vector<uint32_t> neighborStart_, neighbors_;  // subdivided vertex adjacency, for skin creases
     void subdivide();
-    // Skin assets ("skin") were fitted to the coarse body; rebinds them to the smoothed one, so that their edge lies on
-    // the rendered skin.
-    void bindSkinAssets();
+    // Skin assets ("skin") and transferred ones ("smooth") were fitted to the coarse body; rebinds one to the smoothed
+    // body, so that it keeps its height over the rendered skin. Done when an asset is first shown: hundreds of them
+    // at load took minutes.
+    void bindSkinAsset(size_t asset);
+    std::vector<glm::vec3> smoothRest_;               // rest pose of the smoothed body (bindSkinAsset)
+    std::vector<std::vector<uint32_t>> around_;       // smoothed body triangles around each vertex (bindSkinAsset)
     std::vector<Target> targets_;
     std::vector<Target> realism_;  // sculpted anatomy per sex (tools/blender/bake_realism.py), optional
     std::vector<Asset> assets_;

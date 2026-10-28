@@ -232,9 +232,6 @@ std::string assetLabel(const std::string& name) {
     if(name.rfind("clothes_shoes",0)==0) return tr(std::string("Schuhe "))+number;
     return label(name.substr(name.find('_')+1));
 }
-bool isShoes(const std::string& name) { return name.rfind("clothes_shoes",0)==0; }
-bool isHat(const std::string& name) { return name.rfind("clothes_fedora",0)==0; }
-bool isOutfit(const std::string& name) { return name.rfind("clothes_",0)==0 && !isShoes(name) && !isHat(name); }
 
 // Previous/next arrows around a combo listing every entry. Returns true when `selected` changed.
 bool picker(const char* text, const char* id, const std::vector<std::string>& entries, int& selected) {
@@ -260,7 +257,10 @@ template<class Match> bool assetSlot(render::Human& human, const char* text, con
     if(none) { names.push_back(""); entries.push_back(tr("Keine")); }
     for(auto& a:human.catalog()["assets"]) {
         std::string name=a["name"];
-        if(matches(name)) { names.push_back(name); entries.push_back(a.contains("label")?tr(a["label"].get<std::string>()):assetLabel(name)); }
+        if(!matches(name)) continue;
+        names.push_back(name);
+        entries.push_back(english()&&a.contains("labelEn")?a["labelEn"].get<std::string>():
+                          a.contains("label")?tr(a["label"].get<std::string>()):assetLabel(name));
     }
     if(names.empty() || (none && names.size()==1)) return false;
     // Alphabetical, so related styles ("Bob, ...") sit together; "Keine" stays first.
@@ -530,15 +530,37 @@ CharacterCreator::Action CharacterCreator::draw(render::Human& human, render::Ch
         } else theme::muted("Die Frisur behält ihre natürliche Farbe.");
         if(assetSlot(human,"Augenbrauen","eyebrows",[](const std::string& n) { return n.rfind("eyebrows_",0)==0; },true)) dirty_=true;
         if(assetSlot(human,"Wimpern","eyelashes",[](const std::string& n) { return n.rfind("eyelashes_",0)==0; },true)) dirty_=true;
+        {
+            std::set<std::string> beards;
+            for(auto& a:catalog["assets"]) if(render::Human::clothingSlot(a)=="beard") beards.insert(a["name"].get<std::string>());
+            if(assetSlot(human,"Bart","beard",[&](const std::string& n) { return beards.count(n)>0; },true)) dirty_=true;
+        }
         if(state.contains("hairColor")) theme::muted("Augenbrauen und Wimpern übernehmen die Haarfarbe.");
     } else {
         theme::section("KLEIDUNG");
         if(theme::toggle("In Vorschau zeigen","##show-clothes",&showClothes_)) dirty_=true;
+        // One picker per clothing slot (render::Human::clothingSlot); an outfit replaces top and bottom and vice versa.
+        std::map<std::string,std::string> slotOf;
+        for(auto& a:catalog["assets"]) if(a["kind"]=="clothes") slotOf[a["name"]]=render::Human::clothingSlot(a);
+        static const std::pair<const char*,const char*> slots[]={{"Komplett-Outfit","outfit"},{"Oberteil","top"},
+            {"Unterteil","bottom"},{"BH / Top","undertop"},{"Slip / Badehose","underwear"},{"Strümpfe / Socken","legwear"},
+            {"Schuhe","shoes"},{"Kopfbedeckung","hat"},{"Brille","glasses"},{"Handschuhe","gloves"},{"Schmuck","jewelry"},
+            {"Accessoire","accessory"}};
+        for(auto [text,slot]:slots) {
+            auto matches=[&,slot=std::string(slot)](const std::string& n) { auto it=slotOf.find(n); return it!=slotOf.end() && it->second==slot; };
+            if(!assetSlot(human,text,slot,matches,true)) continue;
+            dirty_=true;
+            std::string s=slot;
+            auto& selection=state["assets"];
+            for(auto it=selection.begin();it!=selection.end();) {
+                auto other=slotOf.find(it->get<std::string>());
+                bool clash=other!=slotOf.end() && ((s=="outfit" && (other->second=="top" || other->second=="bottom")) ||
+                                                   ((s=="top" || s=="bottom") && other->second=="outfit"));
+                it=clash?selection.erase(it):it+1;
+            }
+        }
         bool underwear=state.value("underwear",true);
-        if(theme::toggle("Unterwäsche","##underwear",&underwear)) { state["underwear"]=underwear; dirty_=true; }
-        if(assetSlot(human,"Outfit","outfit",isOutfit,true)) dirty_=true;
-        if(assetSlot(human,"Schuhe","shoes",isShoes,true)) dirty_=true;
-        if(assetSlot(human,"Hut","hat",isHat,true)) dirty_=true;
+        if(theme::toggle("Einfache Unterwäsche","##underwear",&underwear)) { state["underwear"]=underwear; dirty_=true; }
         theme::muted("Die Kleidung passt sich automatisch an deine Körperform an.");
     }
     ImGui::EndChild();

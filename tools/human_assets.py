@@ -13,6 +13,62 @@ import numpy as np
 FACE = np.array([-1.0, -1.0, 1.0])  # MPFB humans look along -y; rotate 180 degrees about z
 MAX_TEX = 2048
 KINDS = ("eyes", "eyebrows", "eyelashes", "hair", "clothes")
+# The creator's clothing slots by the asset packs' categories. Outfits cover top and bottom; categories without a
+# slot (nails, horns, unsorted) are not offered.
+SLOTS = {"Shirt/T-shirt/Sweater": "top", "Pants": "bottom", "Skirt": "bottom", "Gown/Robe": "outfit",
+         "Uniform/Armor": "outfit", "Underwear": "underwear", "Shoes/Boots/Socks": "shoes", "Hat/Helmet": "hat",
+         "Gloves": "gloves", "Jewelry": "jewelry", "Accessory": "accessory", "Facialhair": "beard"}
+
+
+def slot_of(asset, category):
+    """Clothing slot: by the pack category, else by the name of MakeHuman's system assets."""
+    if asset["kind"] != "clothes":
+        return None
+    if category:
+        return SLOTS.get(category)
+    name = asset["name"]
+    return "shoes" if name.startswith("clothes_shoes") else "hat" if name.startswith("clothes_fedora") else "outfit"
+
+
+# Creator labels of community assets: the folder name without its author, in English, and in German with the common
+# clothing words translated (the rest stays as it is).
+GERMAN = {"t": "T", "shirt": "Shirt", "tshirt": "T-Shirt", "sweater": "Pullover", "sweatshirt": "Sweatshirt",
+          "hoodie": "Kapuzenpulli", "jacket": "Jacke", "coat": "Mantel", "dress": "Kleid", "gown": "Abendkleid",
+          "skirt": "Rock", "pants": "Hose", "trousers": "Hose", "trouser": "Hose", "jeans": "Jeans", "shorts": "Shorts",
+          "boots": "Stiefel", "boot": "Stiefel", "shoes": "Schuhe", "shoe": "Schuh", "sneakers": "Sneaker",
+          "sandals": "Sandalen", "flats": "Ballerinas", "socks": "Socken", "sock": "Socken", "stockings": "Strümpfe",
+          "stocking": "Strümpfe", "pantyhose": "Strumpfhose", "bra": "BH", "panty": "Slip", "panties": "Slip",
+          "briefs": "Slip", "thong": "String", "string": "String", "bikini": "Bikini", "swimsuit": "Badeanzug",
+          "swimming": "Bade", "trunks": "Badehose", "swimwear": "Bademode", "suit": "Anzug", "glasses": "Brille",
+          "sunglasses": "Sonnenbrille", "sunglass": "Sonnenbrille", "goggles": "Schutzbrille", "gloves": "Handschuhe",
+          "ring": "Ring", "necklace": "Halskette", "bracelet": "Armband", "anklet": "Fußkettchen",
+          "earrings": "Ohrringe", "earring": "Ohrring", "beard": "Bart", "moustache": "Schnurrbart", "hood": "Kapuze",
+          "long": "lang", "short": "kurz", "black": "schwarz", "white": "weiß", "red": "rot", "blue": "blau",
+          "female": "Damen", "male": "Herren", "ladies": "Damen", "mini": "Mini", "knee": "knielang", "length": "",
+          "high": "hoch", "low": "niedrig", "leather": "Leder", "lace": "Spitze", "wool": "Woll", "knitted": "Strick",
+          "winter": "Winter", "with": "mit", "and": "und", "top": "Top", "tank": "Tank", "uniform": "Uniform",
+          "pearl": "Perlen", "diamond": "Diamant", "wedding": "Ehe", "chain": "Ketten", "riding": "Reit",
+          "running": "Lauf", "tennis": "Tennis", "cycling": "Rad", "ankle": "Knöchel", "heel": "Absatz",
+          "heeled": "mit Absatz", "plain": "schlicht", "striped": "gestreift", "tight": "eng", "classic": "klassisch",
+          "medieval": "mittelalterlich", "evening": "Abend", "cocktail": "Cocktail", "pleated": "Falten",
+          "plaid": "kariert", "pencil": "Bleistift", "tiered": "gestuft", "full": "weit", "polo": "Polo",
+          "cardigan": "Strickjacke", "kimono": "Kimono", "robe": "Robe", "apron": "Schürze", "coveralls": "Overall",
+          "wetsuit": "Neoprenanzug", "jumpsuit": "Overall", "romper": "Einteiler", "camisole": "Hemdchen",
+          "stiletto": "Stiletto", "booties": "Stiefeletten", "platform": "Plateau", "warmer": "Stulpen",
+          "optical": "Korrektur", "round": "runde", "frames": "Gestell", "medical": "medizinische", "mask": "Maske"}
+
+
+def labels(key):
+    """(German, English) label for the asset folder name "<author>_<words>"."""
+    words = [w for w in re.split(r"[^a-z0-9]+", key.lower()) if w]
+    if len(words) > 1:
+        words = words[1:]
+    words = [w for w in words if not re.fullmatch(r"\d+|[a-z]?\d+[a-z]?", w)] or words
+    english = " ".join(words)
+    german = " ".join(g for g in (GERMAN.get(w, w) for w in words) if g)
+    return german[:1].upper() + german[1:], english[:1].upper() + english[1:]
+
+
 # MakeHuman's asset FAQ links these licence texts.
 LICENSES = {"CC0": "https://creativecommons.org/publicdomain/zero/1.0/deed.en",
             "CC-BY": "https://creativecommons.org/licenses/by/2.5/se/deed.en"}
@@ -177,7 +233,9 @@ def png_essentials(data):
     return b"".join(chunks)
 
 
-def pil_copy_texture(out):
+def pil_copy_texture(out, max_size=MAX_TEX, jpeg=False):
+    """Texture copier for write_asset. jpeg: textures without transparency are stored as JPEG (a fraction of the
+    size of a PNG; the community packs' textures are photographs)."""
     from PIL import Image
 
     def copy(path, name):
@@ -189,9 +247,14 @@ def pil_copy_texture(out):
             # Some community PNGs carry malformed ancillary chunks (zTXt before iCCP); the pixels themselves are fine.
             img = Image.open(io.BytesIO(png_essentials(open(path, "rb").read())))
         img = img.convert("RGBA" if img.mode in ("RGBA", "LA", "P") else "RGB")
-        if max(img.size) > MAX_TEX:
-            s = MAX_TEX / max(img.size)
+        if max(img.size) > max_size:
+            s = max_size / max(img.size)
             img = img.resize((max(1, int(img.width * s)), max(1, int(img.height * s))), Image.LANCZOS)
+        # Normal maps never use their alpha channel.
+        if jpeg and (img.mode == "RGB" or name.endswith("_nrm") or img.getchannel("A").getextrema()[0] == 255):
+            rel = "tex/" + name + ".jpg"
+            img.convert("RGB").save(os.path.join(out, rel), quality=90)
+            return rel
         rel = "tex/" + name + ".png"
         img.save(os.path.join(out, rel))
         return rel
@@ -219,11 +282,11 @@ def write_credits(out, assets):
     log(len(rows), "assets need attribution")
 
 
-def main(asset_dir, out):
+def main(asset_dir, out, max_size=MAX_TEX, jpeg=False):
     meta_path = os.path.join(out, "human.json")
-    meta = json.load(open(meta_path))
+    meta = json.load(open(meta_path, encoding="utf-8"))
     known = {a["name"] for a in meta["assets"]}
-    copy = pil_copy_texture(out)
+    copy = pil_copy_texture(out, max_size, jpeg)
     packs = pack_metadata(asset_dir)
     added, folders = [], {}
     for kind in KINDS:
@@ -237,6 +300,8 @@ def main(asset_dir, out):
                 known.add(a["name"])
     for a in meta["assets"] + added:
         folder = folders.get(a["name"])
+        if folder is None and "folder" in a:
+            continue  # from another asset directory: its metadata stays
         pack = packs.get(folder, {})
         a["folder"] = folder or a["name"]
         a["license"] = pack.get("license", "CC0")
@@ -246,12 +311,19 @@ def main(asset_dir, out):
         a["author"] = author
         if pack.get("source"):
             a["source"] = pack["source"]
+        if pack.get("category"):
+            a["category"] = pack["category"]
+        if folder in packs and pack.get("category") and "label" not in a:
+            a["label"], a["labelEn"] = labels(folder)
+        slot = pack.get("slot") or slot_of(a, pack.get("category"))
+        if slot:
+            a["slot"] = slot
     write_credits(out, meta["assets"] + added)
     # Keep the kinds grouped in their bake order so the creator lists stay sorted; other kinds (genitals, see
     # blender/bake_genitals.py) go last.
     order = lambda kind: KINDS.index(kind) if kind in KINDS else len(KINDS)
     meta["assets"] = sorted(meta["assets"] + added, key=lambda a: (order(a["kind"]), a["name"]))
-    with open(meta_path, "w") as f:
+    with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f)
     log(len(added), "assets added")
 

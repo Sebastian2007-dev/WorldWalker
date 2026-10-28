@@ -108,12 +108,21 @@ vec3 eyesLight(vec3 albedo, vec3 n, vec3 v, Light l) {
 }
 
 // ---------------------------------------------------------------- cloth
+// Woven fabric: light scattered in the fibres softens the terminator a little, and the fibres standing off the
+// surface catch light at grazing angles (Charlie sheen, Estevez & Kulla 2017), which is what makes cloth read as cloth
+// instead of painted skin. The sheen takes a pale version of the fabric's colour.
+vec3 clothSheen(vec3 albedo) { return mix(albedo, vec3(dot(albedo, kLuma)), 0.5) * 0.9 + 0.04; }
 vec3 clothLight(vec3 albedo, vec3 n, vec3 v, float rough, Light l) {
-    float ndl = max(dot(n, l.dir), 0.0) * l.shadow;
+    float ndl = max(dot(n, l.dir), 0.0);
+    float wrap = max((dot(n, l.dir) + 0.2) / 1.2, 0.0) * l.shadow;
     vec3 h = normalize(l.dir + v);
-    float a = rough * rough, ndh = max(dot(n, h), 0.0);
+    float a = rough * rough, ndh = max(dot(n, h), 0.0), ndv = max(dot(n, v), 1e-3);
     float d = a * a / (PI * pow(ndh * ndh * (a * a - 1.0) + 1.0, 2.0));
-    return l.radiance * (albedo / PI * ndl + d * 0.04 * ndl * 0.25) * PI;
+    float inv = 1.0 / max(rough, 0.3);
+    float sheenD = (2.0 + inv) * pow(max(1.0 - ndh * ndh, 0.0), 0.5 * inv) / (2.0 * PI);
+    float sheenV = 1.0 / (4.0 * (ndl + ndv - ndl * ndv) + 1e-3);
+    vec3 sheen = clothSheen(albedo) * sheenD * sheenV * ndl * l.shadow;
+    return l.radiance * (albedo / PI * wrap + d * 0.04 * ndl * l.shadow * 0.25 + sheen) * PI;
 }
 
 void main() {
@@ -172,8 +181,8 @@ void main() {
     } else {
         for (int i = 0; i < count; ++i) color += clothLight(albedo, n, v, rough, lights[i]);
         color += ambientLight(f, n) * albedo * ambientScale;
-        // Fabric sheen: fibres catch light at grazing angles.
-        if (model == kSkinUnderwear) color += ambientLight(f, n) * pow(1.0 - max(dot(n, v), 0.0), 4.0) * 0.25;
+        // Fabric sheen in the ambient light too: fibres catch light at grazing angles.
+        color += ambientLight(f, n) * clothSheen(albedo) * pow(1.0 - max(dot(n, v), 0.0), 3.0) * 0.35 * ambientScale;
     }
     outColor = vec4(applyFog(f, color, vRel), 1.0);
 }
