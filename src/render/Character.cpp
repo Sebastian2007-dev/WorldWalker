@@ -297,7 +297,7 @@ void Character::setHair(int anchor, const std::vector<HairBone>& bones, const st
             depth[k] = depth[size_t(p)] + 1;
             along[k] = along[size_t(p)] + glm::distance(hair_[size_t(p)].head, hair_[size_t(p)].tail);
         }
-        hairStiffness_[k] = 0.03f + 0.3f * std::exp(-0.45f * float(depth[k]));
+        hairStiffness_[k] = 0.01f + 0.25f * std::exp(-0.9f * float(depth[k]));
         hairRigidity_[k] = std::exp(-along[k] / 0.12f);
     }
     hairTail_.assign(hair_.size(), glm::vec3(0));
@@ -310,7 +310,7 @@ void Character::simulateHair(float dt, const AnimInput& in) {
     if (hair_.empty()) return;
     const size_t base = bones_.size();
     // Damping slows the strands relative to the body, the air drag relative to the world (per step).
-    constexpr float kStep = 1.0f / 60.0f, kDamping = 0.93f, kAirDrag = 0.015f, kGravity = 9.81f, kMargin = 0.012f;
+    constexpr float kStep = 1.0f / 60.0f, kDamping = 0.9f, kAirDrag = 0.015f, kGravity = 9.81f, kMargin = 0.012f;
     // The body's own motion: points at rest in the world move against it in model space (z up, +y forward, x right).
     glm::vec3 move = glm::vec3(in.velocity, in.verticalSpeed) * kStep;
     if (dt > 0.25f) hairReset_ = true;  // a hitch or a teleport: start again from the rest shape

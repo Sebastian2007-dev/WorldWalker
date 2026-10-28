@@ -279,13 +279,14 @@ bool choice(const char* id,const char* title,const char* description,bool active
 void applyQuality(int quality, render::SceneParams& p) {
     struct Preset {
         float scale; bool dynamic; float fps; int shadows; float grass, terrain, trees, treeDistance; bool ssao;
+        float viewDistance;
     };
     // Low keeps TAA: it smooths the upscaled image and the dithered hair. Low also adapts its resolution to hold 30 FPS.
     static const Preset kPresets[] = {
-        {0.7f, true, 30.0f, 0, 0.3f, 0.7f, 0.6f, 900.0f, false},     // Niedrig
-        {0.85f, false, 60.0f, 1, 0.6f, 0.85f, 0.8f, 1500.0f, true},  // Mittel
-        {1.0f, false, 60.0f, 2, 1.0f, 1.0f, 1.0f, 2000.0f, true},    // Hoch
-        {1.0f, false, 60.0f, 2, 1.0f, 1.3f, 1.3f, 2600.0f, true},    // Ultra
+        {0.7f, true, 30.0f, 0, 0.3f, 0.7f, 0.6f, 900.0f, false, 2500.0f},     // Niedrig
+        {0.85f, false, 60.0f, 1, 0.6f, 0.85f, 0.8f, 1500.0f, true, 4000.0f},  // Mittel
+        {1.0f, false, 60.0f, 2, 1.0f, 1.0f, 1.0f, 2000.0f, true, 6000.0f},    // Hoch
+        {1.0f, false, 60.0f, 2, 1.0f, 1.3f, 1.3f, 2600.0f, true, 10000.0f},   // Ultra
     };
     if (quality < kQualityLow || quality > kQualityUltra) return;
     const Preset& q = kPresets[quality];
@@ -299,6 +300,7 @@ void applyQuality(int quality, render::SceneParams& p) {
     p.terrainDetail = q.terrain;
     p.treeDetail = q.trees;
     p.impostorDistance = q.treeDistance;
+    p.viewDistance = q.viewDistance;
     p.ssao = q.ssao;
     p.taa = true;
 }
@@ -337,6 +339,8 @@ void loadSettings(const std::filesystem::path& file, Settings& s, render::SceneP
     get("grassDensity", p.grassDensity);
     get("terrainDetail", p.terrainDetail);
     get("treeDetail", p.treeDetail);
+    get("viewDistance", p.viewDistance);
+    p.viewDistance = std::clamp(p.viewDistance, 1000.0f, 20000.0f);
     p.renderScale = std::clamp(p.renderScale, 0.5f, 1.0f);
     p.targetFps = std::clamp(p.targetFps, 30.0f, 144.0f);
     p.shadowQuality = std::clamp(p.shadowQuality, 0, 2);
@@ -378,6 +382,7 @@ void saveSettings(const std::filesystem::path& file, const Settings& s, const re
         {"grassDensity", p.grassDensity},
         {"terrainDetail", p.terrainDetail},
         {"treeDetail", p.treeDetail},
+        {"viewDistance", p.viewDistance},
         {"timeOfDay", p.timeOfDay},
         {"dayOfYear", p.dayOfYear},
         {"exposure", p.exposure},
@@ -764,6 +769,11 @@ void PauseMenu::drawOptions(GLFWwindow* window, Settings& s, render::SceneParams
             for (int i = 0; i < 5; ++i) if (kLimitValues[i] == s.fpsLimit) limit = i;
             if (choiceRow("Bildraten-Limit", "##fpslimit", kLimits, 5, &limit)) s.fpsLimit = kLimitValues[limit];
             sectionHeader("SICHTWEITE");
+            float view = p.viewDistance / 1000.0f;
+            if (sliderRow("Sichtweite", "##view", &view, 1.0f, 20.0f, "%.1f km", ImGuiSliderFlags_Logarithmic)) {
+                p.viewDistance = view * 1000.0f;
+                custom = true;
+            }
             custom |= sliderRow("B\xC3\xA4ume", "##trees", &p.impostorDistance, 300.0f, 3000.0f, "%.0f m");
             if (custom) s.quality = kQualityCustom;
             float vis = 1.0f / p.fogDensity / 1000.0f;

@@ -60,7 +60,8 @@ void Player::update(float dt, const InputState& in, world::WorldData& data, worl
     if (kneeling_) wish = glm::dvec3(0.0);
 
     // Body yaw: while moving or flying it turns smoothly towards the view; standing still it stays put until the
-    // view is more than 75 degrees away, then turns in place (with the turn animation) until it faces the view.
+    // view is more than 75 degrees away, then turns in place (with the turn animation) until it faces the view. In
+    // third person it stays put however far the view is, so the camera can circle the standing character.
     {
         auto wrap = [](float a) { return std::remainder(a, 6.2831853f); };
         float diff = wrap(yaw_ - bodyYaw_);
@@ -69,6 +70,8 @@ void Player::update(float dt, const InputState& in, world::WorldData& data, worl
             if (moving || flying) {
                 turningInPlace_ = false;
                 bodyYaw_ += diff * (1.0f - std::exp(-dt * 10.0f));
+            } else if (view == View::ThirdPerson) {
+                turningInPlace_ = false;
             } else if (!kneeling_) {
                 if (std::abs(diff) > 1.3f) turningInPlace_ = true;
                 if (turningInPlace_) {

@@ -206,7 +206,8 @@ bool Terrain::visit(int level, int64_t y, int64_t x, const glm::dvec3& cam) {
     double dist = ready ? std::max(0.0, glm::length(cam - c->origin) - c->radius) : approxDist;
     float prio = float(dist / sizeM) - float(level) * 0.01f;
 
-    bool wantSplit = level < kMaxLevel && dist < sizeM * kSplitFactor * double(detail);
+    bool wantSplit = level < kMaxLevel && dist < sizeM * kSplitFactor * double(detail) &&
+                     (range <= 0.0f || dist < double(range) || sizeM > double(range));
     if (wantSplit) {
         bool allReady = true;
         for (int k = 0; k < 4; ++k) {

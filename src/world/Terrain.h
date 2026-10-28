@@ -39,6 +39,7 @@ public:
     bool groundReady() const { return groundReady_; }
 
     float detail = 1.0f;  // scales the distance up to which nodes are refined (graphics quality)
+    float range = 0.0f;   // metres (0: unlimited): beyond it nodes are refined only until they are smaller than it
 
 private:
     struct Chunk {

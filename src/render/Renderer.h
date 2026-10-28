@@ -39,6 +39,7 @@ struct SceneParams {
     float grassDensity = 1.0f;      // 0..1: blade spacing and radius
     float terrainDetail = 1.0f;     // terrain refinement distance factor
     float treeDetail = 1.0f;        // tree LOD distance factor
+    float viewDistance = 6000.0f;   // metres: terrain refinement and trees end here (the horizon stays, coarser)
     float menuFade = 0.0f;      // 0..1, blurs and dims the scene behind the pause menu
     float studio = 0.0f;        // 0..1, camera fixed studio lights on the character (creator preview)
     // The character creator's studio: no world, a backdrop with a floor, fixed light, full resolution and the whole

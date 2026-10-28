@@ -381,10 +381,12 @@ int main(int argc, char** argv) {
         character.update(creator.isOpen() ? std::min(dt,0.1f) : paused ? 0.0f : std::min(dt, 0.1f), anim);
         auto tB = std::chrono::steady_clock::now();
         terrain.detail = params.terrainDetail;
+        terrain.range = params.viewDistance;
         terrain.update(player.cameraPos(), player.lat(), player.lon());
         auto tC = std::chrono::steady_clock::now();
         // Tree view distance limited to what the vegetation cell table holds at this latitude.
-        float treeDistance = std::min(params.impostorDistance, world::Vegetation::maxRadius(player.lat()) - 200.0f);
+        float treeDistance = std::min({params.impostorDistance, params.viewDistance,
+                                       world::Vegetation::maxRadius(player.lat()) - 200.0f});
         veg.update(player.cameraPos(), player.lat(), player.lon(), treeDistance + 200.0f);
         grass.update(player.cameraPos());
         auto tD = std::chrono::steady_clock::now();
