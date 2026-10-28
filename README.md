@@ -16,16 +16,19 @@ git lfs pull
 
 Use `build.bat` to build without launching. Open the character creator through **Esc → Charakter erstellen**, or start with `DEV.bat --creator`. See [the creator documentation](tools/CHARACTER_CREATOR.md) for templates, asset baking and integration tests.
 
-### Clothing (optional, once per checkout)
+### Clothing
 
-The character's wardrobe (about 300 garments, shoes, underwear, accessories and the MakeHuman hairstyles on the MB-Lab bodies) is baked locally from the MakeHuman community asset packs and kept out of version control (about 700 MB). Without it the character has only its built-in hairstyles. With Python 3 (Pillow, NumPy) and Blender 5:
+The character's wardrobe (about 300 garments, shoes, underwear, accessories and the MakeHuman hairstyles on the MB-Lab bodies) is not in the repository. On first start the game offers to download it (about 450 MB, a GitHub release asset described by `assets/wardrobe/package.json`) and unpacks it into `assets/baked/*/extra`; **Esc → Optionen → Anzeige → Garderobe** does it later. Most of these assets are CC-BY: their authors are listed in `assets/baked/human/extra/CREDITS.md`.
+
+To rebake it (Python 3 with Pillow and NumPy, Blender 5), then publish a new version:
 
 ```powershell
 python tools\install_asset_packs.py
-& "C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" -b --python tools\blender\bake_mblab_proxies.py -- assets\baked\human assets\baked\mblab
+& "C:\Program Files\Blender Foundation\Blender 5.2lender.exe" -b --python toolslenderake_mblab_proxies.py -- assetsaked\human assetsaked\mblab
+python tools\pack_wardrobe.py 2
 ```
 
-The first downloads the packs listed in `tools/asset_packs.txt` (about 2 GB, kept in `tools/downloads`) and bakes the selection in `tools/asset_pack_selection.json` into `assets/baked/human/extra`; the second moves it onto the MB-Lab bodies (`assets/baked/mblab/*/extra`). Most of these assets are CC-BY: their authors are listed in `assets/baked/human/extra/CREDITS.md`.
+The first downloads the packs listed in `tools/asset_packs.txt` and bakes the selection in `tools/asset_pack_selection.json`; the second moves it onto the MB-Lab bodies; the third writes `wardrobe-v2.zip` and `assets/wardrobe/package.json`. Upload the zip to a release tagged `wardrobe-v2` and commit `package.json`.
 
 ## Graphics quality
 
