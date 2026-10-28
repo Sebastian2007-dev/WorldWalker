@@ -20,7 +20,11 @@ struct Settings {
     bool vsync = false;
     int fpsLimit = 0;      // frames per second, 0 = unlimited
     std::string language = "de";  // interface language: "de" or "en"
+    bool wardrobeDeclined = false;  // the player chose "Später" on the start screen's wardrobe offer
     std::string gpu;       // adapter name, shown next to the presets (not saved)
+    // Wardrobe (data/Wardrobe): shown under Options > Display (not saved). The menu sets wardrobeRequest.
+    bool wardrobeAvailable = false, wardrobeInstalled = false, wardrobeRequest = false;
+    double wardrobeMegabytes = 0;
 };
 
 // Graphics presets. Custom means the player changed individual settings after choosing one.
@@ -46,6 +50,16 @@ struct HudInfo {
     float alpha = 1;     // fades out behind the pause menu
 };
 void drawHud(const game::Player& player, const Settings& s, const HudInfo& info);
+
+// Full screen wardrobe set-up: the offer (with the download size), then progress, then an error with a retry.
+struct WardrobeScreen {
+    enum class Stage { Offer, Downloading, Unpacking, Failed } stage = Stage::Offer;
+    double megabytes = 0;
+    float progress = 0;   // 0..1 within the stage
+    std::string error;
+};
+enum class WardrobeChoice { None, Install, Later };
+WardrobeChoice drawWardrobeScreen(const WardrobeScreen& screen);
 
 class PauseMenu {
 public:

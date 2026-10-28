@@ -11,7 +11,8 @@
 #   1. The MakeHuman body takes that sex's shape (its macro targets) and is posed into the MB-Lab rest pose: every
 #      bone turns onto the MB-Lab bone's direction and stretches to its length, the skin follows its weights. The
 #      MakeHuman arms hang 20 degrees lower, so without this sleeves would be torn off at the shoulders.
-#   2. What remains between the two skins is a displacement field (closest points on the same body part, smoothed).
+#   2. A non-rigid registration then draws the posed MakeHuman skin onto the MB-Lab skin (closest points both ways,
+#      smoothed over the mesh), so that breasts, crotch and hips correspond, not just the nearest points.
 #   3. Every asset vertex is posed with the weights of the skin it hangs from, then keeps its height over the skin:
 #      its nearest point on the posed MakeHuman skin moves with the field onto the MB-Lab skin, and the height is laid
 #      off along the normal there. Far from the skin (skirt hems, long hair) vertices just move with the field.
@@ -22,7 +23,7 @@ from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mblab_fit import read_base, read_asset, kdtree, barycentric, border_of, hidden_skin
+from mblab_fit import read_base, read_asset, kdtree, barycentric, border_of, hidden_skin, umeyama
 
 argv = sys.argv[sys.argv.index("--") + 1:]
 MH, OUT = os.path.abspath(argv[0]), os.path.abspath(argv[1])
@@ -75,6 +76,13 @@ def bone_matrices(src_meta, src_joints, dst_joints):
     """Per MakeHuman bone: turn onto the MB-Lab bone, stretched along it to its length, head onto head."""
     mats = []
     for b in src_meta["bones"]:
+        if b["name"] == "Hips":
+            # The rigs place the pelvis bone differently (MakeHuman's head 5 cm over the hip joints, MB-Lab's 8 cm under
+            # them): the pelvis follows the hip joints and the start of the spine instead, which mean the same in both.
+            keys = [(k, 0) for k in ("LeftUpLeg", "RightUpLeg", "Spine")]
+            s, r, t = umeyama(np.array([src_joints[k][i] for k, i in keys]), np.array([dst_joints[k][i] for k, i in keys]))
+            mats.append(np.block([[s * r, t[:, None]], [np.zeros((1, 3)), np.ones((1, 1))]]))
+            continue
         if b["name"] not in dst_joints:
             mats.append(mats[b["parent"]] if b["parent"] >= 0 else np.eye(4))
             continue
@@ -154,15 +162,49 @@ def prepare(src, dst, sex, targets):
     dst_parts = np.array([part(dst_names[j]) for j in dst["joints"][np.arange(len(dst["co"])), dst["weights"].argmax(1)]])
     src_trees = part_trees(posed, src["tris"], src_parts)
     dst_trees = part_trees(dst["co"], dst["tris"], dst_parts)
-    disp = np.array([nearest(dst_trees, p, x)[0] - x if p in dst_trees else np.zeros(3)
-                     for x, p in zip(posed, src_parts)])
+    # Near the skin the registration gives a point on the MB-Lab skin already: the whole body may take it (the
+    # triangles in the middle of the crotch belong to neither leg's part).
+    dst_trees["body"] = (dst["tris"], BVHTree.FromPolygons([Vector(x) for x in dst["co"]],
+                                                           [tuple(map(int, t)) for t in dst["tris"]]))
+    # Non-rigid registration: the posed MakeHuman skin is drawn onto the MB-Lab skin. In every step each MakeHuman
+    # vertex pulls towards its nearest MB-Lab point and each MB-Lab vertex pulls the nearest MakeHuman point towards
+    # itself, so a smaller breast is stretched over a larger one instead of being pressed onto its underside (a bra
+    # would slide under the breast). The pulls are smoothed over the MakeHuman mesh, strongly at first, then less.
+    tris = src["tris"]
+    edges = np.unique(np.sort(np.concatenate([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]]), 1), axis=0)
+    degree = np.bincount(edges.ravel(), minlength=len(posed)).astype(np.float64)
+
+    def smooth(d, times):
+        for _ in range(times):
+            total = np.zeros_like(d)
+            np.add.at(total, edges[:, 0], d[edges[:, 1]])
+            np.add.at(total, edges[:, 1], d[edges[:, 0]])
+            d = 0.5 * d + 0.5 * np.where(degree[:, None] > 0, total / np.maximum(degree, 1)[:, None], d)
+        return d
+
+    reg = posed.copy()
+    steps = 16
+    for step in range(steps):
+        reg_trees = part_trees(reg, tris, src_parts)
+        pull, weight = np.zeros_like(reg), np.zeros(len(reg))
+        for i, (x, p) in enumerate(zip(reg, src_parts)):
+            if p in dst_trees:
+                pull[i] += nearest(dst_trees, p, x)[0] - x
+                weight[i] += 1
+        for y, p in zip(dst["co"], dst_parts):
+            if p in reg_trees:
+                loc, _, tri = nearest(reg_trees, p, y)
+                bw = barycentric(loc, *reg[tri])
+                np.add.at(pull, tri, bw[:, None] * (y - loc))
+                np.add.at(weight, tri, bw)
+        d = np.where(weight[:, None] > 0, pull / np.maximum(weight, 1e-9)[:, None], 0.0)
+        reg += smooth(d, int(round(24 * (1 - step / steps))) + 2)
+    disp = reg - posed
     tree = kdtree(posed)
-    near = [[j for _, j, _ in tree.find_n(x, 10)] for x in posed]
-    for _ in range(4):
-        disp = np.array([disp[n].mean(0) for n in near])
-    err = np.linalg.norm(disp, axis=1)
-    log(sex, "MakeHuman posed onto MB-Lab: skin distance %.1f mm median, %.1f mm 90th percentile"
-        % (1000 * np.median(err), 1000 * np.percentile(err, 90)))
+    err = np.array([np.linalg.norm(nearest(dst_trees, p, x)[0] - x) if p in dst_trees else 0.0
+                    for x, p in zip(reg, src_parts)])
+    log(sex, "MakeHuman registered onto MB-Lab: skin distance %.1f mm median, %.1f mm 90th percentile, moved %.1f mm median"
+        % (1000 * np.median(err), 1000 * np.percentile(err, 90), 1000 * np.median(np.linalg.norm(disp, axis=1))))
 
     affines = {}
 
@@ -179,7 +221,8 @@ def prepare(src, dst, sex, targets):
         w = np.array([1.0 / max(d, 1e-4) for _, _, d in nb])
         return x + (disp[[j for _, j, _ in nb]] * w[:, None]).sum(0) / w.sum()
 
-    return {"co": co, "weights": weights, "mats": mats, "posed": posed, "src_trees": src_trees, "dst_parts": dst_parts,
+    return {"co": co, "weights": weights, "mats": mats, "posed": posed, "reg": reg, "src_trees": src_trees,
+            "dst_parts": dst_parts,
             "dst_trees": dst_trees, "field": field, "affine": affine, "names": names}
 
 
@@ -201,20 +244,27 @@ def transfer(entry, origin, src, dst, fit, out):
     # skin of that part moves, instead of following the skin vertex by vertex (which bends a shoe's toe cap inside out).
     footwear = entry["kind"] == "clothes" and share("foot") > 0.3 and np.percentile(posed[:, 2], 90) < 0.6
     headwear = entry["kind"] == "clothes" and share("head") > 0.8
-    placed = []
+    placed, heights, far = [], [], []
     for x, q in zip(posed, qs):
         if footwear or headwear:
             placed.append(fit["affine"](q) @ np.append(x, 1.0))
+            heights.append(0.0)
+            far.append(1.0)
             continue
-        loc, n, _ = nearest(fit["src_trees"], q, x)
+        loc, n, tri = nearest(fit["src_trees"], q, x)
         h = (x - loc) @ n
-        loc2, n2, _ = nearest(fit["dst_trees"], q, fit["field"](loc))
+        # The same point of the registered skin, which lies on MB-Lab's within millimetres.
+        mapped = barycentric(loc, *fit["posed"][tri]) @ fit["reg"][tri]
+        loc2, n2, _ = nearest(fit["dst_trees"], "body", mapped)
         near_skin = loc2 + n2 * max(h, lowest)
         b = np.clip((abs(h) - 0.02) / 0.04, 0, 1)
         placed.append((1 - b) * near_skin + b * fit["field"](x))
+        heights.append(max(h, lowest))
+        far.append(b)
     placed = np.array(placed)
     # Where the nearest skin point jumps (a collar in the hollow between neck and shoulders) neighbours move
-    # differently: the moves are smoothed over the asset's surface, then whatever sank under the skin goes back out.
+    # differently: the moves are smoothed over the asset's surface. Near the skin the smoothing only moves along it:
+    # vertices go back to their height over the skin (else underwear lifts off), and nothing stays under the skin.
     _, weld = np.unique(np.round(placed / 1e-5).astype(np.int64), axis=0, return_inverse=True)
     weld = weld.ravel()
     move = np.zeros((weld.max() + 1, 3))
@@ -229,9 +279,13 @@ def transfer(entry, origin, src, dst, fit, out):
         np.add.at(count, pairs.ravel(), 1)
         move = 0.5 * move + 0.5 * total / count[:, None]
     placed = posed + move[weld]
+    for i, (y, q) in enumerate(zip(placed, qs)):
+        if far[i] < 1:
+            loc, n, _ = nearest(fit["dst_trees"], "body", y)
+            placed[i] = (1 - far[i]) * (loc + n * heights[i]) + far[i] * y
     binding = []
     for i, (y, q) in enumerate(zip(placed, qs)):
-        loc, n, tri = nearest(fit["dst_trees"], q, y)
+        loc, n, tri = nearest(fit["dst_trees"], "body" if far[i] < 1 else q, y)
         if (y - loc) @ n < lowest:
             y = placed[i] = loc + n * lowest
         bw = barycentric(loc, *dst["co"][tri])
@@ -241,7 +295,7 @@ def transfer(entry, origin, src, dst, fit, out):
         # Skin the cloth covers closely: within 1.5 cm over it along the normal, or up to 2 cm under it, where a coarse
         # garment spans a sharp shape (MB-Lab's nipples) as a chord. Under a loose skirt or a wide trouser hem the
         # skin stays, else one would look into the garment there.
-        hide = hidden_skin(dst, placed, atris, border_of(atris, placed), margin=0.008, reach=(0.02, 0.035))
+        hide = hidden_skin(dst, placed, atris, border_of(atris, placed), margin=0.004, reach=(0.02, 0.035))
         # Footwear hides the foot below its opening: MB-Lab's toes reach further than the MakeHuman shoes, and above
         # the opening the ankle keeps the shoe's lining out of sight.
         if footwear:
@@ -249,6 +303,10 @@ def transfer(entry, origin, src, dst, fit, out):
             opening = np.percentile(edge[edge > np.median(placed[:, 2])], 10) if (edge > np.median(placed[:, 2])).any()                 else placed[:, 2].max()
             foot = np.char.startswith(fit["dst_parts"], "foot") & (dst["co"][:, 2] < opening - 0.01)
             hide = sorted(set(hide) | set(np.nonzero(foot)[0].tolist()))
+        # Socks, stockings and tights hide the whole foot they cover: made for MakeHuman's shorter foot, they would
+        # leave MB-Lab's toes out.
+        elif entry.get("slot") == "legwear" and share("foot") > 0.05:
+            hide = sorted(set(hide) | set(np.nonzero(np.char.startswith(fit["dst_parts"], "foot"))[0].tolist()))
     with open(os.path.join(out, os.path.basename(entry["file"])), "wb") as f:
         f.write(struct.pack("<I", len(binding)))
         for (tri, bw, off), uv in zip(binding, pv["uv"]):
@@ -280,8 +338,14 @@ for sex in ("female", "male"):
     fit = prepare(src, dst, sex, targets)
     out = os.path.join(OUT, sex, "extra")
     os.makedirs(out, exist_ok=True)
-    assets = [transfer(entry, origin, src, dst, fit, out)
-              for origin, catalog in catalogs for entry in catalog["assets"] if entry["kind"] in KINDS]
+    # PROXIES_ONLY=name,name redoes just these assets, keeping the others of an earlier run (checks).
+    only = set(filter(None, os.environ.get("PROXIES_ONLY", "").split(",")))
+    keep = []
+    if only and os.path.exists(os.path.join(out, "human.json")):
+        keep = [a for a in json.load(open(os.path.join(out, "human.json"), encoding="utf-8"))["assets"]
+                if a["name"] not in only]
+    assets = keep + [transfer(entry, origin, src, dst, fit, out) for origin, catalog in catalogs
+                     for entry in catalog["assets"] if entry["kind"] in KINDS and (not only or entry["name"] in only)]
     with open(os.path.join(out, "human.json"), "w", encoding="utf-8") as f:
         json.dump({"assets": assets}, f)
     log(sex, "done:", len(assets), "assets")

@@ -45,7 +45,21 @@ const std::unordered_map<std::string_view, const char*>& translations() {
         {"Mausrad", "Mouse wheel"}, {"Fluggeschwindigkeit / Kamera-Abstand", "Flying speed / camera distance"},
         {"Debug-Info", "Debug info"}, {"Menü", "Menu"},
         {"HUD anzeigen", "Show HUD"}, {"Fadenkreuz", "Crosshair"}, {"Debug-Info (F3)", "Debug info (F3)"},
-        {"SPRACHE", "LANGUAGE"}, {"Sprache", "Language"},
+        {"SPRACHE", "LANGUAGE"}, {"Sprache", "Language"}, {"GARDEROBE", "WARDROBE"}, {"Garderobe", "Wardrobe"},
+        {"Installiert", "Installed"}, {"Nicht installiert", "Not installed"},
+        {"Neu laden (%.0f MB)", "Download again (%.0f MB)"}, {"Herunterladen (%.0f MB)", "Download (%.0f MB)"},
+        {"Herunterladen", "Download"}, {"Erneut versuchen", "Try again"}, {"Später", "Later"},
+        {"Für deinen Charakter gibt es rund 300 Kleidungsstücke, Schuhe, Unterwäsche und Accessoires. Sie werden "
+         "einmalig heruntergeladen und eingerichtet.",
+         "There are about 300 garments, shoes, underwear and accessories for your character. They are downloaded and "
+         "set up once."},
+        {"Die Garderobe konnte nicht eingerichtet werden.", "The wardrobe could not be set up."},
+        {"Download: %.0f MB. Du kannst das auch später unter Optionen > Anzeige nachholen.",
+         "Download: %.0f MB. You can also do this later under Options > Display."},
+        {"Lade herunter ... %.0f von %.0f MB", "Downloading ... %.0f of %.0f MB"},
+        {"Richte ein ... %.0f %%", "Setting up ... %.0f %%"},
+        {"Du kannst währenddessen weiterspielen, wenn du das Fenster schließt: Esc.",
+         "You can keep playing meanwhile: close this screen with Esc."},
         // ---- teleport
         {"KOORDINATEN", "COORDINATES"}, {"Breite", "Latitude"}, {"Länge", "Longitude"}, {"Hinspringen", "Go there"},
         {"ORTE", "PLACES"}, {"Schwarzwald", "Black Forest"}, {"Wettersteingebirge", "Wetterstein Mountains"},

@@ -338,6 +338,7 @@ void loadSettings(const std::filesystem::path& file, Settings& s, render::SceneP
     get("fullscreen", s.fullscreen);
     get("quality", s.quality);
     get("language", s.language);
+    get("wardrobeDeclined", s.wardrobeDeclined);
     if (s.language != "en") s.language = "de";
     setLanguage(s.language == "en" ? Language::English : Language::German);
     get("vsync", s.vsync);
@@ -384,6 +385,7 @@ void saveSettings(const std::filesystem::path& file, const Settings& s, const re
         {"fullscreen", s.fullscreen},
         {"quality", s.quality},
         {"language", s.language},
+        {"wardrobeDeclined", s.wardrobeDeclined},
         {"vsync", s.vsync},
         {"fpsLimit", s.fpsLimit},
         {"renderScale", p.renderScale},
@@ -612,6 +614,64 @@ void drawHud(const game::Player& player, const Settings& s, const HudInfo& info)
         ImVec2 ts = textSize(g_fonts.small, text);
         shadowText(dl, g_fonts.small, ImVec2(vs.x - ts.x - S(28), vs.y - ts.y - S(28)), col(kText, 0.8f * hint), text, hint);
     }
+}
+
+// ---------------------------------------------------------------- wardrobe
+
+WardrobeChoice drawWardrobeScreen(const WardrobeScreen& screen) {
+    ImVec2 vs = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(vs);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin("##wardrobe", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(ImVec2(0, 0), vs, col(kInk, 0.9f));
+    float x0 = std::max(vs.x * 0.07f, S(48)), top = vs.y * 0.22f, width = std::min(S(620), vs.x * 0.6f);
+    shadowText(dl, g_fonts.title, ImVec2(x0, top), col(kText), tr("Garderobe"));
+    float y = top + g_fonts.title->FontSize + S(6);
+    dl->AddRectFilled(ImVec2(x0 + S(4), y + S(10)), ImVec2(x0 + S(52), y + S(13)), col(kAccent), S(1.5f));
+    ImGui::SetCursorScreenPos(ImVec2(x0 + S(4), y + S(36)));
+    ImGui::PushTextWrapPos(x0 + width);
+    WardrobeChoice choice = WardrobeChoice::None;
+    using Stage = WardrobeScreen::Stage;
+    if (screen.stage == Stage::Offer || screen.stage == Stage::Failed) {
+        if (screen.stage == Stage::Offer) {
+            ImGui::TextUnformatted(tr("Für deinen Charakter gibt es rund 300 Kleidungsstücke, Schuhe, Unterwäsche und "
+                                      "Accessoires. Sie werden einmalig heruntergeladen und eingerichtet."));
+        } else {
+            ImGui::TextUnformatted(tr("Die Garderobe konnte nicht eingerichtet werden."));
+            ImGui::TextDisabled("%s", screen.error.c_str());
+        }
+        ImGui::Dummy(ImVec2(0, S(6)));
+        ImGui::TextDisabled(tr("Download: %.0f MB. Du kannst das auch später unter Optionen > Anzeige nachholen."),
+                            screen.megabytes);
+        ImGui::Dummy(ImVec2(0, S(18)));
+        float x = ImGui::GetCursorScreenPos().x - S(26);
+        ImGui::SetCursorScreenPos(ImVec2(x, ImGui::GetCursorScreenPos().y));
+        if (menuItem(screen.stage == Stage::Offer ? "Herunterladen" : "Erneut versuchen", S(420))) choice = WardrobeChoice::Install;
+        ImGui::SetCursorScreenPos(ImVec2(x, ImGui::GetCursorScreenPos().y));
+        if (menuItem("Später", S(420))) choice = WardrobeChoice::Later;
+    } else {
+        bool down = screen.stage == Stage::Downloading;
+        char text[128];
+        if (down) std::snprintf(text, sizeof(text), tr("Lade herunter ... %.0f von %.0f MB"),
+                                screen.progress * screen.megabytes, screen.megabytes);
+        else std::snprintf(text, sizeof(text), tr("Richte ein ... %.0f %%"), screen.progress * 100.0f);
+        ImGui::TextUnformatted(text);
+        ImGui::Dummy(ImVec2(0, S(10)));
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float h = S(8);
+        dl->AddRectFilled(p, ImVec2(p.x + width, p.y + h), col(0xFFFFFF, 0.1f), h * 0.5f);
+        dl->AddRectFilled(p, ImVec2(p.x + width * std::clamp(screen.progress, 0.0f, 1.0f), p.y + h), col(kAccent), h * 0.5f);
+        ImGui::Dummy(ImVec2(width, h + S(14)));
+        ImGui::TextDisabled("%s", tr("Du kannst währenddessen weiterspielen, wenn du das Fenster schließt: Esc."));
+    }
+    ImGui::PopTextWrapPos();
+    ImGui::End();
+    return choice;
 }
 
 // ---------------------------------------------------------------- pause menu
@@ -843,6 +903,14 @@ void PauseMenu::drawOptions(GLFWwindow* window, Settings& s, render::SceneParams
             toggleRow("HUD anzeigen", "##hud", &s.showHud);
             toggleRow("Fadenkreuz", "##cross", &s.crosshair);
             toggleRow("Debug-Info (F3)", "##dbg", &s.showDebug);
+            if (s.wardrobeAvailable) {
+                sectionHeader("GARDEROBE");
+                rowLabel(s.wardrobeInstalled ? "Installiert" : "Nicht installiert");
+                char label[96];
+                std::snprintf(label, sizeof(label), tr(s.wardrobeInstalled ? "Neu laden (%.0f MB)" : "Herunterladen (%.0f MB)"),
+                              s.wardrobeMegabytes);
+                if (ImGui::Button((std::string(label) + "###wardrobe").c_str(), ImVec2(g_fieldW, 0))) s.wardrobeRequest = true;
+            }
             sectionHeader("SPRACHE");
             static const char* kLanguages[] = {"Deutsch", "English"};
             int lang = s.language == "en" ? 1 : 0;

@@ -32,6 +32,7 @@
 #include "world/WorldData.h"
 #include "data/Http.h"
 #include "data/CogFile.h"
+#include "data/Wardrobe.h"
 
 namespace fs = std::filesystem;
 
@@ -71,6 +72,8 @@ int main(int argc, char** argv) {
     std::vector<std::string> creatorAssets;  // --creator-asset <name>: replaces the selected asset of that kind  // --no-anim: the character stays in its bind pose
     const char* humanDir = "mblab";  // --human human: the MakeHuman body (bake_human.py) instead of MB-Lab's
     bool creatorClothes = false;  // --creator-clothes: the preview shows the outfit
+    bool creatorStrip = false;    // --creator-strip: no clothes but those given with --creator-asset
+    bool installWardrobe = false; // --install-wardrobe: download and unpack the wardrobe, then exit (checks, servers)
     std::vector<std::pair<std::string, float>> creatorSet;  // --creator-set key=value (numeric appearance values)
     bool thirdPerson = false, timeGiven = false, noShadows = false, noGrass = false, noTaa = false, noSsao = false;
     float clouds = -1.0f;
@@ -90,6 +93,8 @@ int main(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--creator-orbit") && i + 1 < argc) creatorOrbit = float(std::atof(argv[++i]));
         else if (!std::strcmp(argv[i], "--creator-nude")) creatorNude = true;
         else if (!std::strcmp(argv[i], "--creator-clothes")) creatorClothes = true;
+        else if (!std::strcmp(argv[i], "--creator-strip")) creatorStrip = true;
+        else if (!std::strcmp(argv[i], "--install-wardrobe")) installWardrobe = true;
         else if (!std::strcmp(argv[i], "--human") && i + 1 < argc) humanDir = argv[++i];
         else if (!std::strcmp(argv[i], "--no-anim")) noAnim = true;
         else if (!std::strcmp(argv[i], "--creator-asset") && i + 1 < argc) creatorAssets.push_back(argv[++i]);
@@ -247,6 +252,14 @@ int main(int argc, char** argv) {
         else human.applyTemplate(!std::strcmp(creatorTemplate,"female") ? render::Human::Template::Female : render::Human::Template::Male);
     }
     if (creator.isOpen() && creatorNude) human.state["underwear"] = false;
+    if (creator.isOpen() && creatorStrip) {
+        auto& selected = human.state["assets"];
+        for (auto it = selected.begin(); it != selected.end();) {
+            bool clothes = false;
+            for (auto& b : human.catalog()["assets"]) clothes |= b["name"] == *it && b["kind"] == "clothes";
+            it = clothes ? selected.erase(it) : it + 1;
+        }
+    }
     if (creator.isOpen())
         for (auto& name : creatorAssets)
             for (auto& a : human.catalog()["assets"]) {
@@ -281,6 +294,23 @@ int main(int argc, char** argv) {
         if (settings.fullscreen) ui::setFullscreen(app.window, true);
     }
     settings.gpu = dev.gpuName();
+    // The wardrobe (data/Wardrobe): offered on the start screen until it is installed or the player says "Später".
+    wardrobe::Installer wardrobe(assetDir, assetDir.parent_path() / "cache");
+    settings.wardrobeAvailable = wardrobe.available();
+    settings.wardrobeInstalled = wardrobe.installed();
+    settings.wardrobeMegabytes = double(wardrobe.bytes()) / 1e6;
+    bool wardrobeShown = !shotPath && wardrobe.available() && !settings.wardrobeInstalled && !settings.wardrobeDeclined;
+    bool wardrobeLoaded = settings.wardrobeInstalled;
+    if (installWardrobe) {
+        wardrobe.start();
+        while (wardrobe.busy()) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            std::printf("wardrobe: %s %.0f %%\n", wardrobe.phase() == wardrobe::Installer::Phase::Downloading ? "download" : "unpack",
+                        wardrobe.progress() * 100.0f);
+        }
+        std::printf("wardrobe: %s %s\n", wardrobe.installed() ? "installed" : "failed", wardrobe.error().c_str());
+        return wardrobe.installed() ? 0 : 1;
+    }
     // First start: pick a preset that suits this GPU.
     if (settings.quality < 0) {
         settings.quality = ui::detectQuality(dev.integratedGpu(), dev.deviceLocalBytes());
@@ -326,15 +356,16 @@ int main(int argc, char** argv) {
 
         if (!shotPath) {
             if (app.escape && !ImGui::GetIO().WantTextInput) {
-                if (creator.isOpen()) finishCreator(creator.cancel(human));
+                if (wardrobeShown) wardrobeShown = false;  // a running download goes on in the background
+                else if (creator.isOpen()) finishCreator(creator.cancel(human));
                 else if (menu.isOpen()) menu.back();
                 else menu.open(player.lat(), player.lon());
             }
             if (app.focusLost && !menu.isOpen() && !creator.isOpen()) menu.open(player.lat(), player.lon());
-            bool uiOpen = menu.isOpen() || creator.isOpen();
+            bool uiOpen = menu.isOpen() || creator.isOpen() || wardrobeShown;
             if (uiOpen == app.mouseCaptured) captureMouse(app, !uiOpen);
         }
-        bool paused = menu.isOpen() || creator.isOpen();
+        bool paused = menu.isOpen() || creator.isOpen() || wardrobeShown;
         if (creator.isOpen()) {
             player.view = game::Player::View::ThirdPerson;
             player.setLook(player.bodyHeading()*57.29578f + creator.view.orbit, creator.view.pitch);
@@ -468,6 +499,42 @@ int main(int argc, char** argv) {
             }
         }
         finishCreator(creator.draw(human,character,characterFile));
+        // Wardrobe: the start screen or the request from the options, then reloading the human once it is unpacked.
+        if (settings.wardrobeRequest) {
+            settings.wardrobeRequest = false;
+            wardrobeShown = true;
+            menu.close();
+        }
+        if (wardrobe.phase() == wardrobe::Installer::Phase::Done && !wardrobeLoaded && !creator.isOpen()) {
+            wardrobeLoaded = settings.wardrobeInstalled = true;
+            wardrobeShown = false;
+            human.load(assetDir / "baked" / humanDir);
+            if (human.ready() && human.loadPreset(characterFile) && human.state.value("enabled", true)) human.rebuild(character);
+        }
+        if (wardrobeShown) {
+            using Stage = ui::WardrobeScreen::Stage;
+            ui::WardrobeScreen screen;
+            screen.megabytes = settings.wardrobeMegabytes;
+            screen.progress = wardrobe.progress();
+            switch (wardrobe.phase()) {
+                case wardrobe::Installer::Phase::Downloading: screen.stage = Stage::Downloading; break;
+                case wardrobe::Installer::Phase::Unpacking: screen.stage = Stage::Unpacking; break;
+                case wardrobe::Installer::Phase::Failed: screen.stage = Stage::Failed; screen.error = wardrobe.error(); break;
+                default: screen.stage = Stage::Offer; break;
+            }
+            switch (ui::drawWardrobeScreen(screen)) {
+                case ui::WardrobeChoice::Install:
+                    wardrobeLoaded = false;
+                    wardrobe.start();
+                    break;
+                case ui::WardrobeChoice::Later:
+                    wardrobeShown = false;
+                    settings.wardrobeDeclined = true;
+                    ui::saveSettings(settingsFile, settings, params, player);
+                    break;
+                case ui::WardrobeChoice::None: break;
+            }
+        }
         params.menuFade = creator.isOpen() ? 0.0f : menu.fade();
         params.studio += ((creator.isOpen() ? 1.0f : 0.0f) - params.studio) * std::min(dt * 4.0f, 1.0f);
         params.studioRoom = creator.isOpen();
